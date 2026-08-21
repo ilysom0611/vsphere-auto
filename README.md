@@ -8,12 +8,32 @@ Automated, **Linux-first** batch VM deployment for **vSphere (vCenter / ESXi)**.
 
 ## Prerequisites
 
-- **OS:** Linux (Ubuntu 20.04+ / RHEL 8+ / CentOS 7 / any systemd host). macOS works for development.
-- **Python:** 3.11 or newer. `install.sh` auto-provisions Python 3.11 on CentOS 7 via `uv` (no root) or SCL/yum — just run `bash install.sh`.
+- **OS:** Linux with systemd. See [Recommended OS Versions](#recommended-os-versions) below. macOS works for development only.
+- **Python:** 3.11 or newer. `install.sh` auto-provisions Python 3.11 when missing (including CentOS 7 via `uv` without root) — just run `bash install.sh`.
   Manual install if needed: `sudo apt install python3.11 python3.11-venv python3-pip` (Debian/Ubuntu) or `sudo dnf install python3.11` (RHEL/Rocky).
 - **Network:** Reachability to vCenter/ESXi on port 443.
 - **vSphere access:** An account with permissions to create/clone VMs, read datastores/networks/folders, and run guest customization (e.g. `Administrator@vsphere.local` or a custom role).
 - **Optional:** `uv` (faster installs; `pip` works fine without it). Install via `curl -LsSf https://astral.sh/uv/install.sh | sh`.
+
+### Recommended OS Versions
+
+> `install.sh` auto-installs Python 3.11 when not present, so most modern distros work out of the box. The table below is the **tested / recommended** matrix for production.
+
+| OS | Version | Status | Notes |
+|----|---------|--------|-------|
+| **Ubuntu** | **22.04 LTS / 24.04 LTS** | ✅ Recommended | Best tested; Python 3.11+ available via `apt`. First choice for new deployments. |
+| Ubuntu | 20.04 LTS | ⚠️ Supported | Works, but EOL Apr 2030 (ESM). Python 3.11 via `apt` / `deadsnakes` PPA. |
+| **RHEL / Rocky / Alma** | **9.x** | ✅ Recommended | Production recommended; `dnf install python3.11` natively. |
+| RHEL / Rocky / Alma | 8.x | ✅ Supported | Fully supported; `dnf install python3.11` natively. |
+| **Debian** | **12 (bookworm)** | ✅ Recommended | `apt install python3.11` natively. |
+| Debian | 11 (bullseye) | ⚠️ Supported | Works; Python 3.11 via `bullseye-backports` or `uv`. |
+| CentOS | 7 | ⚠️ Legacy — EOL Jun 30 2024 | Still works via `install.sh` auto-provision (`uv` pulls Python 3.11 without root). **Migrate to Rocky/Alma 8/9 strongly recommended** — no security updates. |
+| CentOS Stream / Fedora | latest | ⚠️ Community | Should work; not formally tested in CI. |
+| macOS | 13+ | 🛠️ Dev only | For development / `plan --dry-run`; not for production service. |
+
+**vSphere:** vCenter **7.0 U3+ / 8.0+** and ESXi 7.0/8.0. Direct ESXi connections work but some `CustomizationSpec` (guest customization) features require vCenter — the tool falls back automatically.
+
+**Why not CentOS 7 for new installs?** CentOS 7 reached EOL and ships Python 3.6 + pip 8 which cannot build this project. `install.sh` works around it, but you inherit an unpatched base OS. For any new host, use **Ubuntu 22.04/24.04** or **Rocky/Alma 9**.
 
 ---
 
