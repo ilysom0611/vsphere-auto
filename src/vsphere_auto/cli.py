@@ -227,12 +227,32 @@ def deploy(config: str = typer.Option(..., "--config", "-c", help="Config YAML p
 
 
 @app.command()
-def serve(host: str = typer.Option("0.0.0.0"), port: int = typer.Option(8080)):
+def serve(
+    host: str = typer.Option("0.0.0.0"),
+    port: int = typer.Option(8080),
+    debug: bool = typer.Option(False, "--debug", help="Enable Flask debug + DEBUG log level (or set VSPHERE_DEBUG=1)"),
+):
+    import logging
+
+    from .utils.logging import setup_logging
     from .web.app import create_app
 
+    # Env var is an alias so `VSPHERE_DEBUG=1 bash start.sh` works without CLI flag.
+    if os.environ.get("VSPHERE_DEBUG", "").strip().lower() in ("1", "true", "yes", "on"):
+        debug = True
+
+    # Logging: DEBUG in debug mode unless LOG_LEVEL is explicitly set.
+    level = os.environ.get("LOG_LEVEL") or ("DEBUG" if debug else "INFO")
+    setup_logging(level)
+    if debug:
+        logging.getLogger().setLevel(getattr(logging, level.upper(), logging.DEBUG))
+
     app_flask = create_app()
-    console.print(f"[green]Serving on http://{host}:{port}[/green]")
-    app_flask.run(host=host, port=port, debug=False)
+    mode = "debug" if debug else "production"
+    console.print(f"[green]Serving on http://{host}:{port}  ({mode})[/green]")
+    if debug:
+        console.print("[yellow]Debug mode ON — verbose logs + auto-reload; do not use in production.[/yellow]")
+    app_flask.run(host=host, port=port, debug=debug, use_reloader=debug)
 
 
 if __name__ == "__main__":
