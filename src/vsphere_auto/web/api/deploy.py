@@ -171,10 +171,9 @@ def _deploy_after_expand(cfg: dict[str, Any], vms: list, consumed: list[str]):
     if not vms:
         raise ValueError("No VMs to deploy (vms empty)")
 
-    # Allocate the batch row atomically (redacts secrets before persisting).
-    batch_id = create_batch_auto(cfg)
-
-    # Resolve connection — reuse config resolver when possible
+    # Resolve connection FIRST (reuse config resolver when possible) so a
+    # validation failure returns 400 without leaving a phantom pending batch
+    # row behind.
     creds_ref = (cfg.get("vcenter") or {}).get("credsRef")
     vc_raw = cfg.get("vcenter") or {}
     host = vc_raw.get("host")
@@ -221,6 +220,10 @@ def _deploy_after_expand(cfg: dict[str, Any], vms: list, consumed: list[str]):
 
     if not (host or "").strip() or not (user or "").strip():
         raise ValueError("vCenter host/user not resolved (set vcenter.host/user or credsRef)")
+
+    # Allocate the batch row atomically (redacts secrets before persisting) —
+    # only after all request validation above has passed.
+    batch_id = create_batch_auto(cfg)
 
     # For non-blocking: run in background thread and return batch_id immediately.
     import threading
