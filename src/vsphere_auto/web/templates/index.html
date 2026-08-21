@@ -64,21 +64,51 @@ async function loadCreds(){
 }
 async function doDiscover(useTmp){
   const status=document.getElementById('discoverStatus');
+  const out=document.getElementById('discoverResult');
   status.textContent='Discovering...';
+  out.textContent='';
+  const b1=document.getElementById('btnDiscover'), b2=document.getElementById('btnDiscoverTmp');
+  if(b1) b1.disabled=true; if(b2) b2.disabled=true;
   let body={};
   if(useTmp){
     body={host:document.getElementById('tmpHost').value, username:document.getElementById('tmpUser').value, password:document.getElementById('tmpPass').value, port:document.getElementById('tmpPort').value};
   } else {
     const v=document.getElementById('credsSelect').value;
-    if(!v){ status.textContent='Please select a credential or use a temporary connection.'; return; }
+    if(!v){ status.textContent='Please select a credential or use a temporary connection.'; if(b1) b1.disabled=false; if(b2) b2.disabled=false; return; }
     body={credsId:parseInt(v,10)};
   }
-  const r=await fetch('/api/discover',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-  const j=await r.json();
+  let r,j,raw;
+  try{
+    r=await fetch('/api/discover',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    raw=await r.text();
+    try{ j=JSON.parse(raw); }catch(e){ j={raw:raw.slice(0,4000)}; }
+  }catch(e){
+    status.textContent='Network/error: '+(e&&e.message||e);
+    out.textContent='Fetch failed: '+(e&&e.stack||e)+'\nTip: check vSphere host is reachable on 443 and credential is correct.';
+    if(b1) b1.disabled=false; if(b2) b2.disabled=false;
+    return;
+  }
+  if(b1) b1.disabled=false; if(b2) b2.disabled=false;
   inventory=j;
-  document.getElementById('discoverResult').textContent=JSON.stringify(j,null,2);
-  status.textContent=r.ok?'Done':'Failed';
-  if(r.ok) fillSelects(j);
+  out.textContent=JSON.stringify(j,null,2);
+  if(!r.ok){
+    const msg=(j&&(j.error||j.detail))||('HTTP '+r.status+' '+raw.slice(0,500));
+    status.textContent='Failed: '+msg;
+    return;
+  }
+  if(j&&j.error && !j.summary){
+    status.textContent='Failed: '+j.error;
+    return;
+  }
+  if(j&&j.error){
+    status.textContent='Warning: '+j.error;
+  }else{
+    const s=j.summary||{};
+    const ver=j.version ? (' vSphere '+j.version+' api '+(j.apiVersion||'')) : '';
+    status.textContent='Done'+ver+' — DC:'+(s.datacenters||0)+' clusters:'+(s.clusters||0)+' ds:'+(s.datastores||0)+' nets:'+(s.networks||0)+' tmpl:'+(s.templates||0);
+    if(j.warning) status.textContent+=' (warning: '+j.warning+')';
+  }
+  fillSelects(j);
 }
 function fillSelects(inv){
   const t=document.getElementById('fTemplate'); t.innerHTML='<option value="">-- auto / select --</option>';
