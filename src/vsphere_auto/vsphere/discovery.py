@@ -6,22 +6,49 @@ availability vary across versions so every access is guarded.
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from typing import Any
 
 log = logging.getLogger(__name__)
 
+# Per-view timeout for 6.7 large inventories (CreateContainerView can block)
+_VIEW_TIMEOUT = 15
+
 
 def _get_obj(content, vim_type: list, name: str | None = None):
-    """Helper to get managed objects via containerView."""
-    view = content.viewManager.CreateContainerView(content.rootFolder, vim_type, True)
-    try:
-        objs = list(view.view)
-    finally:
+    """Helper to get managed objects via containerView with hard timeout."""
+    view_holder: list[Any] = []
+    exc_holder: list[BaseException] = []
+    objs_holder: list[list[Any]] = []
+
+    def _target():
         try:
-            view.Destroy()
+            view = content.viewManager.CreateContainerView(content.rootFolder, vim_type, True)
+            view_holder.append(view)
+            try:
+                objs_holder.append(list(view.view))
+            except BaseException as e:
+                exc_holder.append(e)
+        except BaseException as e:
+            exc_holder.append(e)
+
+    t = threading.Thread(target=_target, daemon=True)
+    t.start()
+    t.join(timeout=_VIEW_TIMEOUT)
+    if t.is_alive():
+        log.warning("discover: CreateContainerView %s timed out after %ss (6.7 large inventory)", vim_type, _VIEW_TIMEOUT)
+        # view may be leaked (daemon thread) but we return empty to keep discover progressing
+        return [] if name is None else None
+    if exc_holder:
+        raise exc_holder[0]
+    # cleanup view
+    if view_holder:
+        try:
+            view_holder[0].Destroy()
         except Exception:
             pass
+    objs = objs_holder[0] if objs_holder else []
     if name:
         for o in objs:
             if getattr(o, "name", None) == name:
@@ -272,7 +299,26 @@ def test_connection(host: str, port: int, user: str, password: str) -> dict[str,
     si = None
     try:
         si = connect(host, port, user, password)
-        inv = discover(si)
+        # discover can block on 6.7 large inventories — enforce hard timeout
+        inv_holder: list[dict[str, Any]] = []
+        exc_holder: list[BaseException] = []
+
+        def _discover_target():
+            try:
+                inv_holder.append(discover(si))
+            except BaseException as e:
+                exc_holder.append(e)
+
+        t = threading.Thread(target=_discover_target, daemon=True)
+        t.start()
+        t.join(timeout=40)
+        if t.is_alive():
+            log.warning("test_connection: discover timed out after 40s for %s:%s", host, port)
+            inv = {"error": "discover timed out after 40s (large inventory or 6.7 slow view)", "datacenters": [], "clusters": [], "datastores": [], "networks": [], "templates": [], "vms": [], "summary": {}}
+        elif exc_holder:
+            raise exc_holder[0]
+        else:
+            inv = inv_holder[0] if inv_holder else {}
         # Even on partial failure, return ok if we got datacenters
         errs = inv.get("error")
         if inv.get("datacenters") or not errs:
