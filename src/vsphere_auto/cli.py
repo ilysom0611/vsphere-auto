@@ -76,14 +76,39 @@ def creds_remove(id: int = typer.Argument(..., help="Credential ID")):
 
 @creds_app.command("test")
 def creds_test(id: str = typer.Argument(..., help="Credential ID or name")):
+    import json
+    import traceback
+
     from .creds.store import resolve_creds
     from .vsphere.discovery import test_connection
 
     c = resolve_creds(id)
     if not c:
         console.print(f"[red]Not found: {id}[/red]"); raise typer.Exit(1)
-    res = test_connection(c.host, c.port, c.username, c.decrypted_password())
-    console.print(res)
+    # Decrypt explicitly so password issues show up
+    try:
+        pwd = c.decrypted_password()
+    except Exception as e:
+        console.print(f"[red]Failed to decrypt password for {id}: {e}[/red]")
+        if __import__("os").environ.get("VSPHERE_DEBUG"):
+            traceback.print_exc()
+        raise typer.Exit(1)
+    if not pwd:
+        console.print(f"[yellow]Warning: credential {id} has no password stored (hasPassword=false). Testing without password will likely fail.[/yellow]")
+    console.print(f"[dim]Testing {c.host}:{c.port} as {c.username} ...[/dim]")
+    try:
+        res = test_connection(c.host, c.port, c.username, pwd)
+    except Exception as e:
+        console.print(f"[red]test_connection raised: {e}[/red]")
+        if __import__("os").environ.get("VSPHERE_DEBUG"):
+            traceback.print_exc()
+        # Also return a structured error so callers can parse it
+        console.print(json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False, indent=2))
+        raise typer.Exit(1)
+    # Always print JSON so it never looks "empty"
+    console.print(json.dumps(res, ensure_ascii=False, indent=2))
+    if not res.get("ok"):
+        raise typer.Exit(1)
 
 
 @app.command()
