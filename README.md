@@ -6,6 +6,37 @@ Automated, **Linux-first** batch VM deployment for **vSphere (vCenter / ESXi)**.
 
 ---
 
+## Prerequisites
+
+- **OS:** Linux (Ubuntu 20.04+ / RHEL 8+ / any systemd host). macOS works for development.
+- **Python:** 3.11 or newer (`python3 --version`). If missing: `sudo apt install python3.11 python3.11-venv python3-pip` (Debian/Ubuntu) or `sudo dnf install python3.11` (RHEL/CentOS).
+- **Network:** Reachability to vCenter/ESXi on port 443.
+- **vSphere access:** An account with permissions to create/clone VMs, read datastores/networks/folders, and run guest customization (e.g. `Administrator@vsphere.local` or a custom role).
+- **Optional:** `uv` (faster installs; `pip` works fine without it). Install via `curl -LsSf https://astral.sh/uv/install.sh | sh`.
+
+---
+
+## Dependencies
+
+All Python dependencies are declared in `pyproject.toml` and installed automatically by `install.sh`. No manual `pip install` is needed.
+
+| Package | Version | Purpose |
+|---------|---------|---------|
+| `flask` | >=3.0 | Web UI and REST API |
+| `pyvmomi` | >=7.0 | vSphere SOAP API (clone, create VM, customization, discovery) |
+| `pyyaml` | >=6.0 | YAML config parsing |
+| `pydantic` | >=2.0 | Config validation |
+| `typer` | >=0.12 | CLI |
+| `rich` | >=13.0 | CLI tables and progress |
+| `cryptography` | >=42.0 | Fernet encryption for stored passwords |
+| `tenacity` | >=8.0 | Retry with backoff for vSphere connections |
+| `requests` | >=2.31 | vSphere REST helpers (content library, etc.) |
+| `jinja2` | >=3.1 | Template rendering (cloud-init, etc.) |
+
+Build backend: `hatchling`.
+
+---
+
 ## One-Click Download & Start
 
 ### Option A: git (recommended)
@@ -33,7 +64,58 @@ uv sync && uv run vsphere-auto --help
 uv run vsphere-auto serve --port 8080
 ```
 
-> `install.sh` picks `uv sync` or `pip install -e .` automatically and creates `state/` plus the encryption key `state/.fernet.key` (0600).
+### One-Click Install Commands (with dependency install)
+
+If your host is fresh and you want everything in one go — system deps + Python + app:
+
+**Debian / Ubuntu (apt):**
+
+```bash
+# 1) System packages
+sudo apt update && sudo apt install -y python3.11 python3.11-venv python3-pip git curl
+
+# 2) App
+git clone https://github.com/ilysom0611/vsphere-auto.git && cd vsphere-auto
+bash install.sh
+
+# 3) Verify
+vsphere-auto --help
+# or: python3 -m vsphere_auto --help
+# or: uv run vsphere-auto --help  (if uv is installed)
+
+# 4) Start Web UI
+bash start.sh  # http://localhost:8080
+```
+
+**RHEL / CentOS / Rocky (dnf):**
+
+```bash
+sudo dnf install -y python3.11 python3-pip git curl
+git clone https://github.com/ilysom0611/vsphere-auto.git && cd vsphere-auto
+bash install.sh && bash start.sh
+```
+
+**Using uv (any distro):**
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+export PATH="$HOME/.local/bin:$PATH"
+git clone https://github.com/ilysom0611/vsphere-auto.git && cd vsphere-auto
+uv sync
+uv run vsphere-auto --help
+uv run vsphere-auto serve --port 8080
+```
+
+**Manual pip (no install.sh):**
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e .
+vsphere-auto --help
+python3 -m vsphere_auto serve --port 8080
+```
+
+> `install.sh` picks `uv sync` or `pip install -e .` automatically, creates `state/` and the encryption key `state/.fernet.key` (0600), and prints next steps.
 
 ---
 
