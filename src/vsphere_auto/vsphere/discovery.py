@@ -233,11 +233,19 @@ def _group_by_type(objs) -> dict[str, list[Any]]:
 
 
 def _props(oc) -> dict[str, Any]:
-    """ObjectContent -> flat {propertyName: value} map."""
+    """ObjectContent -> flat {propertyName: value} map.
+
+    Field name differs across pyVmomi generations: modern builds expose
+    ``oc.propSet`` (the actual vmodl field), some older ones ``oc.prop``.
+    """
     out: dict[str, Any] = {}
     try:
-        for p in getattr(oc, "prop", []) or []:
-            out[p.name] = p.val
+        for key in ("propSet", "prop"):
+            entries = getattr(oc, key, None)
+            if entries:
+                for p in entries:
+                    out[p.name] = p.val
+                break
     except Exception:
         pass
     return out
