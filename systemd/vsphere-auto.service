@@ -7,7 +7,8 @@ Type=simple
 WorkingDirectory=/opt/vsphere-auto
 ExecStart=/opt/vsphere-auto/.venv/bin/vsphere-auto serve --host 0.0.0.0 --port 8080
 Restart=on-failure
-Environment=VSPHERE_AUTO_KEY=
+# VSPHERE_AUTO_KEY is loaded from state/.fernet.key; set only if you use an external vault
+# Environment=VSPHERE_AUTO_KEY=
 # EnvironmentFile=/etc/vsphere-auto/env
 
 [Install]

@@ -10,6 +10,9 @@ state/*.db
 state/*.key
 state/logs/
 state/inventory.json
+state/ip_pools.json
+state/.python_bin
+state/.venv_python
 .uv/
 uv.lock
 .env

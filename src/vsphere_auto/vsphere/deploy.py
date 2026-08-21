@@ -209,7 +209,7 @@ def clone_from_template(
     # Disk resize: extend first disk if disk_gb larger than template default.
     # Requires deviceChange on the clone spec.  If disk_gb is smaller we ignore
     # (shrink not supported) and log a warning.
-    if disk_gb is not None and config_spec is not None:
+    if disk_gb is not None:
         # We will append disk deviceChange if needed — handled below via
         # inspecting template hardware.  Best-effort; if it fails we still clone.
         try:
@@ -381,24 +381,39 @@ def create_vm_from_iso(
         try:
             hw = getattr(getattr(vm, "config", None), "hardware", None)
             devices = getattr(hw, "device", None) or []
+            cdrom = None
             for dev in devices:
                 if isinstance(dev, vim.vm.device.VirtualCdrom):
                     cdrom = dev
-                    # 6.7 GA IsoBackingInfo has only fileName; datastore attr is 6.7U2+/7.0
-                    try:
-                        backing = vim.vm.device.VirtualCdrom.IsoBackingInfo(fileName=iso_path, datastore=ds_obj)
-                    except TypeError:
-                        backing = vim.vm.device.VirtualCdrom.IsoBackingInfo(fileName=iso_path)
-                    cdrom.backing = backing
-                    cdrom.connectable = vim.vm.device.VirtualDevice.ConnectInfo(connected=True, startConnected=True)
-                    spec = vim.vm.ConfigSpec(deviceChange=[vim.vm.device.VirtualDeviceSpec(operation="edit", device=cdrom)])
-                    t2 = vm.ReconfigVM_Task(spec)
-                    r2 = _poll_task(t2, timeout=120)
-                    if r2["state"] == "error":
-                        log.warning("ISO attach failed for %s: %s", vm_name, r2.get("error"))
-                    elif r2["state"] == "timeout":
-                        log.warning("ISO attach timed out for %s", vm_name)
                     break
+            # If no CD-ROM exists on the blank VM, create one
+            operation = "edit" if cdrom is not None else "add"
+            if cdrom is None:
+                cdrom = vim.vm.device.VirtualCdrom()
+                cdrom.key = -1
+                # Attach to IDE controller 0, unit 0 if possible
+                try:
+                    for d in devices:
+                        if isinstance(d, vim.vm.device.VirtualIDEController):
+                            cdrom.controllerKey = d.key
+                            cdrom.unitNumber = 0
+                            break
+                except Exception:
+                    pass
+            # 6.7 GA IsoBackingInfo has only fileName; datastore attr is 6.7U2+/7.0
+            try:
+                backing = vim.vm.device.VirtualCdrom.IsoBackingInfo(fileName=iso_path, datastore=ds_obj)
+            except TypeError:
+                backing = vim.vm.device.VirtualCdrom.IsoBackingInfo(fileName=iso_path)
+            cdrom.backing = backing
+            cdrom.connectable = vim.vm.device.VirtualDevice.ConnectInfo(connected=True, startConnected=True)
+            spec = vim.vm.ConfigSpec(deviceChange=[vim.vm.device.VirtualDeviceSpec(operation=operation, device=cdrom)])
+            t2 = vm.ReconfigVM_Task(spec)
+            r2 = _poll_task(t2, timeout=120)
+            if r2["state"] == "error":
+                log.warning("ISO attach failed for %s: %s", vm_name, r2.get("error"))
+            elif r2["state"] == "timeout":
+                log.warning("ISO attach timed out for %s", vm_name)
         except Exception as e:
             log.warning("ISO attach handling failed for %s: %s", vm_name, e)
     return vm

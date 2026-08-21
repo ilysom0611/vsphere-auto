@@ -208,7 +208,7 @@ def deploy(config: str = typer.Option(..., "--config", "-c", help="Config YAML p
         console.print(f"[red]{e}[/red]"); raise typer.Exit(1)
     cfg_dict = cfg.model_dump() if hasattr(cfg, "model_dump") else cfg.dict()  # type: ignore
     try:
-        vms = expand_batch(cfg_dict)
+        vms = expand_batch(cfg_dict, persist=True)
     except ValueError as e:
         console.print(f"[red]{e}[/red]"); raise typer.Exit(1)
     if not vms:

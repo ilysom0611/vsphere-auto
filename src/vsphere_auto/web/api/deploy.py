@@ -35,7 +35,7 @@ def deploy_api():
     data = request.get_json(force=True) or {}
     cfg = data.get("config") or data
     try:
-        vms = expand_batch(cfg)
+        vms = expand_batch(cfg, persist=True)
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
     if not vms:
@@ -46,10 +46,16 @@ def deploy_api():
 
     # Resolve connection — reuse config resolver when possible
     creds_ref = (cfg.get("vcenter") or {}).get("credsRef")
-    host = (cfg.get("vcenter") or {}).get("host")
-    user = (cfg.get("vcenter") or {}).get("user") or (cfg.get("vcenter") or {}).get("username")
-    pwd = (cfg.get("vcenter") or {}).get("password")
-    port = int((cfg.get("vcenter") or {}).get("port") or 443)
+    vc_raw = cfg.get("vcenter") or {}
+    host = vc_raw.get("host")
+    user = vc_raw.get("user") or vc_raw.get("username")
+    pwd = vc_raw.get("password")
+    # Track whether port was explicitly set in payload (mirrors config._raw_has_port)
+    has_port = "port" in vc_raw and vc_raw.get("port") is not None
+    try:
+        port = int(vc_raw.get("port") or 443)
+    except (TypeError, ValueError):
+        port = 443
     datacenter = (cfg.get("vcenter") or {}).get("datacenter")
     vc_cluster = (cfg.get("vcenter") or {}).get("cluster")
     vc_datastore = (cfg.get("vcenter") or {}).get("datastore")
@@ -67,10 +73,15 @@ def deploy_api():
 
         c = resolve_creds(str(creds_ref))
         if c:
-            host = (host or "").strip() or c.host
+            orig_host = (host or "").strip()
+            host = orig_host or c.host
             user = (user or "").strip() or c.username
             pwd = pwd or c.decrypted_password()
-            port = port if (host or "").strip() else c.port
+            # Only keep JSON port if explicitly set and host was overridden;
+            # otherwise use the saved credential's port.
+            if not has_port or not orig_host:
+                port = c.port
+            # keep parsed port when has_port and orig_host truthy
     else:
         import os
 
@@ -120,7 +131,7 @@ def deploy_api():
                 if _ip == "auto":
                     _ip = None
                 nics.append({"ip": _ip, "netmask": ippool.get("netmask"), "gateway": ippool.get("gateway")})
-        if (ip and ip not in ("auto",)) or nics is not None:
+        if (ip and ip not in ("auto", "dhcp")) or nics is not None:
             try:
                 from ...vsphere.customization import build_linux_customization
 

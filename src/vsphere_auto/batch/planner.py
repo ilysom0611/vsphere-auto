@@ -25,8 +25,12 @@ def spec_hash(spec: dict[str, Any]) -> str:
     return hashlib.sha256(normalized.encode()).hexdigest()[:16]
 
 
-def expand_batch(cfg: dict[str, Any]) -> list[dict[str, Any]]:
-    """Expand cfg['vms'] with naming template and IP auto allocation."""
+def expand_batch(cfg: dict[str, Any], persist: bool = False) -> list[dict[str, Any]]:
+    """Expand cfg['vms'] with naming template and IP auto allocation.
+
+    If persist=True, auto-allocated IPs are persisted to state/ip_pools.json.
+    Plan/dry-run must use persist=False (default) to avoid consuming IPs.
+    """
     vms = cfg.get("vms", [])
     batch_cfg = cfg.get("batch") or {}
     naming = batch_cfg.get("naming")
@@ -75,10 +79,11 @@ def expand_batch(cfg: dict[str, Any]) -> list[dict[str, Any]]:
                 if ip:
                     net["ip"] = ip
                     allocated.append(ip)
-                    try:
-                        persist_allocate(ip)
-                    except Exception as e:
-                        log.warning("persist_allocate %s failed: %s", ip, e)
+                    if persist:
+                        try:
+                            persist_allocate(ip)
+                        except Exception as e:
+                            log.warning("persist_allocate %s failed: %s", ip, e)
                 else:
                     log.warning("IP pool exhausted for %s (cidr=%s)", vm.get("name"), cidr)
         vm["_specHash"] = spec_hash({k: v for k, v in vm.items() if not k.startswith("_")})

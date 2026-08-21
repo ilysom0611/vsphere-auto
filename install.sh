@@ -2,21 +2,54 @@
 set -e
 # ---------------------------------------------------------------------------
 # Resolve the directory this script lives in — works for:
-#   1) `bash install.sh`      (BASH_SOURCE populated)
-#   2) `curl … | bash`        (BASH_SOURCE empty — reads /proc/self/exe or argv)
-#   3) scripts installed via `pip install -e .` (argv[0] may be the venv path)
-# Fallback chain: BASH_SOURCE → /proc/self/exe → dirname of argv[0] → git rev-parse
+#   1) `bash install.sh` / `./install.sh`  (BASH_SOURCE populated)
+#   2) `curl … | bash`                     (BASH_SOURCE empty → use $PWD)
+#   3) `bash /tmp/install.sh`              (absolute path)
 # ---------------------------------------------------------------------------
-if [ -n "${BASH_SOURCE[0]}" ] && [ -f "${BASH_SOURCE[0]}" ]; then
+if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "${BASH_SOURCE[0]}" ]; then
   _SRC="${BASH_SOURCE[0]}"
-elif [ -L /proc/self/exe ]; then
-  _SRC="$(readlink -f /proc/self/exe 2>/dev/null || true)"
+else
+  _SRC="$0"
 fi
-# _SRC may still be empty (non-Bash invocers). Fall back to dirname of $0.
-_SCRIPT_DIR="${_SRC:-$0}"
-SCRIPT_DIR="$(cd "$(dirname "$_SCRIPT_DIR")" && pwd)"
+# For `curl | bash`, _SRC is "bash" (no slash) or "-bash" — treat as PWD.
+# For any _SRC without a slash, fall back to PWD so we don't cd to /usr/bin.
+if [[ "$_SRC" != *"/"* ]]; then
+  SCRIPT_DIR="$(pwd)"
+else
+  SCRIPT_DIR="$(cd "$(dirname "$_SRC")" && pwd)"
+fi
 cd "$SCRIPT_DIR"
 echo "Installing vsphere-auto..."
+# If invoked via `curl | bash` the repo is not present — clone it.
+if [ ! -f "pyproject.toml" ] && [ ! -f "setup.py" ]; then
+  echo "[install] No pyproject.toml in $SCRIPT_DIR — checking for existing checkout..."
+  if [ -f "vsphere-auto/pyproject.toml" ]; then
+    echo "[install] Found vsphere-auto/pyproject.toml — cd there"
+    cd vsphere-auto
+    SCRIPT_DIR="$(pwd)"
+  elif command -v git >/dev/null 2>&1; then
+    echo "[install] Cloning https://github.com/ilysom0611/vsphere-auto.git ..."
+    if [ -d "vsphere-auto" ]; then
+      echo "[install] Directory vsphere-auto already exists — updating"
+      git -C vsphere-auto pull --ff-only 2>&1 | tail -3 || true
+      cd vsphere-auto
+    else
+      git clone https://github.com/ilysom0611/vsphere-auto.git vsphere-auto 2>&1 | tail -5 || {
+        echo "[install] git clone failed — please run manually:"
+        echo "  git clone https://github.com/ilysom0611/vsphere-auto.git && cd vsphere-auto && bash install.sh"
+        exit 1
+      }
+      cd vsphere-auto
+    fi
+    SCRIPT_DIR="$(pwd)"
+    echo "[install] Repo ready at $SCRIPT_DIR"
+  else
+    echo "[install] ERROR: Not in repo and git not found."
+    echo "  Install git, or run:"
+    echo "    git clone https://github.com/ilysom0611/vsphere-auto.git && cd vsphere-auto && bash install.sh"
+    exit 1
+  fi
+fi
 
 # ---------------------------------------------------------------------------
 # 1) Ensure Python >= 3.11 — auto-provision on CentOS 7 / old distros
