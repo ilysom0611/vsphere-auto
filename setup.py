@@ -1,12 +1,7 @@
-"""Fallback for ancient pip (<19) and setuptools on CentOS 7 / old distros.
+"""Fallback for ancient pip (<19) on CentOS 7 that cannot read pyproject.toml.
 
 Modern pip (>=19) ignores this file and builds via pyproject.toml + hatchling.
-On pip 8.x (CentOS 7) there is no PEP 517 support, so `pip install -e .`
-fails with "setup.py not found". This shim makes the same install work
-without requiring a pip upgrade first (though `install.sh` still tries to
-upgrade pip when possible).
-
-Keep `install_requires` in sync with pyproject.toml.
+Keep install_requires/python_requires in sync with pyproject.toml.
 """
 from setuptools import find_packages, setup
 
