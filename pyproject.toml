@@ -3,7 +3,7 @@ name = "vsphere-auto"
 version = "0.1.0"
 description = "vSphere automated batch VM deployment with auto resource selection, idempotency and robustness"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.11"
 dependencies = [
     "flask>=3.0",
     "pyvmomi>=7.0",

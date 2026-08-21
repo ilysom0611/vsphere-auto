@@ -36,8 +36,3 @@ def get_task_api(tid: str):
     if not t:
         return jsonify({"error": "Not found"}), 404
     return jsonify(t)
-
-
-@bp.get("/api/health")
-def health():
-    return jsonify({"ok": True})

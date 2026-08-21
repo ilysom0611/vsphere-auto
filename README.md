@@ -72,10 +72,17 @@ bash start.sh
 
 ### Option B: curl (no git required)
 
+`install.sh` auto-clones the repo when piped, so no prior `git clone` is needed:
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ilysom0611/vsphere-auto/main/install.sh | bash
-bash start.sh
+# repo is cloned to ./vsphere-auto automatically
+bash vsphere-auto/start.sh
+# or: cd vsphere-auto && bash start.sh
+# Open http://localhost:8080
 ```
+
+> If `git` is not installed the script will exit with install instructions.
 
 ### Option C: uv users
 
@@ -100,12 +107,13 @@ git clone https://github.com/ilysom0611/vsphere-auto.git && cd vsphere-auto
 bash install.sh
 
 # 3) Verify
-vsphere-auto --help
-# or: python3 -m vsphere_auto --help
-# or: uv run vsphere-auto --help  (if uv is installed)
+.venv/bin/vsphere-auto --help   # venv entrypoint (always works after install.sh)
+# or: vsphere-auto --help            # if .venv/bin is on PATH or pip --user
+# or: python3 -m vsphere_auto --help # module form
+# or: uv run vsphere-auto --help     # if uv is installed
 
 # 4) Start Web UI
-bash start.sh  # http://localhost:8080
+bash start.sh  # http://localhost:8080 (auto-picks .venv/bin/python)
 ```
 
 **RHEL / Rocky 8+ (dnf):**
@@ -150,7 +158,7 @@ vsphere-auto --help
 python3 -m vsphere_auto serve --port 8080
 ```
 
-> `install.sh` auto-provisions **Python 3.11** when missing (CentOS 7 included: via `uv` without root), picks `uv sync` or `pip install -e .` automatically, creates `state/` and the encryption key `state/.fernet.key` (0600), and records the interpreter to `state/.python_bin` for `start.sh`.
+> `install.sh` auto-provisions **Python 3.11** when missing (CentOS 7 included: via `uv` without root), picks `uv sync` or `pip install -e .` automatically, creates `state/` and the encryption key `state/.fernet.key` (0600), and records the interpreter to `state/.python_bin` for `start.sh`. When piped via `curl | bash` the script clones the repo to `./vsphere-auto` automatically.
 
 ---
 

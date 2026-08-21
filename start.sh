@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
 set -e
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "${BASH_SOURCE[0]}" ]; then
+  _SRC="${BASH_SOURCE[0]}"
+else
+  _SRC="$0"
+fi
+if [[ "$_SRC" != *"/"* ]]; then
+  SCRIPT_DIR="$(pwd)"
+else
+  SCRIPT_DIR="$(cd "$(dirname "$_SRC")" && pwd)"
+fi
 cd "$SCRIPT_DIR"
 
 # Usage: bash start.sh [port] [--debug]
