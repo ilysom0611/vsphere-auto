@@ -203,17 +203,30 @@ def _collect_inventory(content, timeout: int = _VIEW_TIMEOUT) -> list[Any]:
     return holder[0] if holder else []
 
 
+def _type_name(obj) -> str:
+    """Bare vmodl type name ('Datacenter') for an object.
+
+    pyVmomi 9.x returns a QUALIFIED __name__ ('vim.Datacenter') while older
+    releases returned the bare name — every type-based lookup must go through
+    this normalizer or lookups silently miss.
+    """
+    try:
+        return type(obj).__name__.rsplit(".", 1)[-1]
+    except Exception:
+        return ""
+
+
 def _group_by_type(objs) -> dict[str, list[Any]]:
     grouped: dict[str, list[Any]] = {}
     seen: set[tuple[str, str]] = set()
     for oc in objs or []:
         try:
             obj = getattr(oc, "obj", None)
-            key = (type(obj).__name__, str(getattr(obj, "_moId", "")))
+            key = (_type_name(obj), str(getattr(obj, "_moId", "")))
             if key in seen:
                 continue
             seen.add(key)
-            grouped.setdefault(type(obj).__name__, []).append(oc)
+            grouped.setdefault(key[0], []).append(oc)
         except Exception:
             continue
     return grouped
@@ -302,7 +315,7 @@ def discover(si, datacenter: str | None = None) -> dict[str, Any]:
     result["standaloneHosts"] = [
         {"name": _props(oc).get("name", ""), "moid": _moid(oc.obj)}
         for oc in grouped.get("ComputeResource", [])
-        if type(getattr(oc, "obj", None)).__name__ == "ComputeResource"
+        if _type_name(getattr(oc, "obj", None)) == "ComputeResource"
     ]
 
     # Datastores — missing summary props default exactly like the old lazy access
