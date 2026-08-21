@@ -1,0 +1,50 @@
+# vSphere Auto — example config
+# Fill host OR credsRef (saved credential name). Leave auto fields empty to auto-select.
+
+vcenter:
+  # Option A: reference saved credential
+  # credsRef: prod-vc
+  # Option B: direct connection
+  host: 10.0.0.10
+  port: 443
+  user: administrator@vsphere.local
+  # password via VSPHERE_PASSWORD env or --password-file, not here
+  datacenter: DC1
+  # cluster: auto
+  # datastore: auto
+  # network: auto
+
+defaults:
+  folder: workloads/demo
+  resourcePool: auto
+  guestId: ubuntu64Guest
+  firmware: bios          # bios | efi
+  hardwareVersion: auto
+
+batch:
+  concurrency: 5
+  onError: continue       # continue | fail-fast
+  naming: "demo-{index:02d}"
+
+ipPool:
+  cidr: 10.10.20.0/24
+  gateway: 10.10.20.1
+  netmask: 255.255.255.0
+  dns: [10.10.20.2, 8.8.8.8]
+  # poolsFile: ./state/ip_pools.json
+
+vms:
+  - name: demo-01
+    template: tpl-ubuntu22-04   # template OR iso (mutually exclusive)
+    cpu: 4
+    memoryMB: 8192
+    diskGB: 80
+    guestId: ubuntu64Guest
+    networks:
+      - network: auto
+        ip: auto                # auto | dhcp | 10.10.20.11
+  # - name: demo-02
+  #   iso: "[datastore1] iso/ubuntu-22.04.iso"
+  #   cpu: 2
+  #   memoryMB: 4096
+  #   diskGB: 40

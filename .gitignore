@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+state/*.db
+state/*.key
+state/logs/
+state/inventory.json
+.uv/
+uv.lock
+.env
+.DS_Store
