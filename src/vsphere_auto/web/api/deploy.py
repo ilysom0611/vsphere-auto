@@ -1,6 +1,7 @@
 """Deploy API: plan + deploy (batch)."""
 from __future__ import annotations
 
+import logging
 import uuid
 from flask import Blueprint, jsonify, request
 
@@ -8,6 +9,8 @@ from ...batch.planner import expand_batch
 from ...batch.state import create_batch, next_batch_id
 from ...inventory import load_inventory_any
 from ...vsphere.selector import auto_select_all
+
+log = logging.getLogger(__name__)
 
 bp = Blueprint("deploy_api", __name__)
 
@@ -20,7 +23,10 @@ def plan_api():
     # auto-select preview
     inv = load_inventory_any()
     selection = auto_select_all(inv or {}, cfg) if inv else {}
-    vms = expand_batch(cfg)
+    try:
+        vms = expand_batch(cfg)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     return jsonify({"selection": selection, "vms": vms, "count": len(vms)})
 
 
@@ -28,15 +34,17 @@ def plan_api():
 def deploy_api():
     data = request.get_json(force=True) or {}
     cfg = data.get("config") or data
-    vms = expand_batch(cfg)
+    try:
+        vms = expand_batch(cfg)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     if not vms:
         return jsonify({"error": "No VMs to deploy (vms empty)"}), 400
 
     batch_id = next_batch_id()
     create_batch(batch_id, cfg)
 
-    # Resolve connection for deploy function
-    # Build deploy_fn that uses vsphere deploy helpers
+    # Resolve connection — reuse config resolver when possible
     creds_ref = (cfg.get("vcenter") or {}).get("credsRef")
     host = (cfg.get("vcenter") or {}).get("host")
     user = (cfg.get("vcenter") or {}).get("user") or (cfg.get("vcenter") or {}).get("username")
@@ -47,7 +55,10 @@ def deploy_api():
     vc_datastore = (cfg.get("vcenter") or {}).get("datastore")
     defaults = cfg.get("defaults") or {}
     batch_cfg = cfg.get("batch") or {}
-    concurrency = int(batch_cfg.get("concurrency") or 5)
+    try:
+        concurrency = int(batch_cfg.get("concurrency") or 5)
+    except (TypeError, ValueError):
+        concurrency = 5
     on_error = batch_cfg.get("onError") or "continue"
 
     # resolve credsRef if present
@@ -56,38 +67,36 @@ def deploy_api():
 
         c = resolve_creds(str(creds_ref))
         if c:
-            host = host or c.host
-            user = user or c.username
+            host = (host or "").strip() or c.host
+            user = (user or "").strip() or c.username
             pwd = pwd or c.decrypted_password()
-            port = port if host else c.port
+            port = port if (host or "").strip() else c.port
     else:
-        # also check direct password via env already handled in config.py, but here we use raw body
         import os
 
         if not pwd:
             pwd = os.environ.get("VSPHERE_PASSWORD", "")
 
-    if not host or not user:
+    if not (host or "").strip() or not (user or "").strip():
         return jsonify({"error": "vCenter host/user not resolved (set vcenter.host/user or credsRef)"}), 400
 
     # For non-blocking: run in background thread and return batch_id immediately.
-    # Simple approach: spawn thread
     import threading
 
     from ...batch.executor import run_batch
     from ...vsphere.client import connect, disconnect
 
     def deploy_one(vm: dict):
-        # per-VM deploy: clone or iso
         template = vm.get("template")
         iso = vm.get("iso")
         name = vm.get("name")
-        cpu = int(vm.get("cpu") or 2)
-        mem = int(vm.get("memoryMB") or 4096)
+        cpu_raw = vm.get("cpu")
+        mem_raw = vm.get("memoryMB")
+        cpu = int(cpu_raw) if cpu_raw is not None else 2
+        mem = int(mem_raw) if mem_raw is not None else 4096
         disk = vm.get("diskGB")
         folder = vm.get("folder") or defaults.get("folder")
         guest_id = vm.get("guestId") or defaults.get("guestId") or "ubuntu64Guest"
-        # network/ip handling simplified: first network
         nets = vm.get("networks") or []
         ip = None
         netmask = None
@@ -101,29 +110,38 @@ def deploy_api():
         if ip and ip not in ("dhcp", "auto"):
             gateway = ippool.get("gateway")
             netmask = ippool.get("netmask")
-        # customization
+        # Build multi-NIC customization if multiple networks
         custom = None
-        if ip and ip not in ("auto",):
+        nics = None
+        if nets and len(nets) > 1:
+            nics = []
+            for n in nets:
+                _ip = n.get("ip")
+                if _ip == "auto":
+                    _ip = None
+                nics.append({"ip": _ip, "netmask": ippool.get("netmask"), "gateway": ippool.get("gateway")})
+        if (ip and ip not in ("auto",)) or nics is not None:
             try:
                 from ...vsphere.customization import build_linux_customization
 
-                custom = build_linux_customization(
-                    hostname=name, domain="", dns=ippool.get("dns"), ip=ip if ip != "dhcp" else None, netmask=netmask, gateway=gateway
-                )
-            except Exception:
+                if nics is not None:
+                    custom = build_linux_customization(hostname=name, domain="", dns=ippool.get("dns"), nics=nics)
+                else:
+                    custom = build_linux_customization(
+                        hostname=name, domain="", dns=ippool.get("dns"), ip=ip if ip != "dhcp" else None, netmask=netmask, gateway=gateway
+                    )
+            except Exception as e:
+                log.warning("build_linux_customization for %s failed: %s", name, e)
                 custom = None
 
-        si = connect(host, port, user, pwd)
+        si = None
         try:
-            # idempotency: check if VM already exists and spec hash matches (handled in executor, but also direct check)
+            si = connect(host, port, user, pwd)
             from ...vsphere.deploy import find_vm, clone_from_template, create_vm_from_iso
 
             content = si.RetrieveContent()
             existing = find_vm(content, name, folder)
-            # if exists, treat as success (idempotent) — executor already handles hash check, but double-check here
-            # For now, if exists, return ok without cloning
             if existing is not None:
-                # verify spec hash already handled; just return ok
                 return {"ok": True, "skipped": True, "moid": getattr(existing, "_moId", "")}
 
             if template:
@@ -137,6 +155,7 @@ def deploy_api():
                     folder_name=folder,
                     cpu=cpu,
                     memory_mb=mem,
+                    disk_gb=int(disk) if disk is not None else None,
                     customization_spec=custom,
                 )
                 from ...vsphere.tasks import wait_for_task
@@ -146,12 +165,9 @@ def deploy_api():
                     return {"ok": True, "moid": str(getattr(res.get("result"), "_moId", "")) if res.get("result") else ""}
                 return {"ok": False, "error": res.get("error") or "Clone failed"}
             elif iso:
-                # iso_path is datastore path like "[ds] iso/file.iso" or via vm.iso field
                 ds_name = vc_datastore if vc_datastore and vc_datastore != "auto" else None
-                # try parse iso string
                 iso_path = iso
                 if iso_path.startswith("["):
-                    # extract ds name
                     try:
                         ds_name = iso_path.split("]")[0].lstrip("[")
                     except Exception:
@@ -163,7 +179,8 @@ def deploy_api():
             else:
                 return {"ok": False, "error": "Either template or iso required"}
         finally:
-            disconnect(si)
+            if si is not None:
+                disconnect(si)
 
     def _bg():
         run_batch(batch_id, vms, deploy_one, concurrency=concurrency, on_error=on_error)

@@ -6,6 +6,8 @@ cd "$SCRIPT_DIR"
 # Usage: bash start.sh [port] [--debug]
 #   VSPHERE_DEBUG=1 bash start.sh   # env-var alias
 #   LOG_LEVEL=DEBUG bash start.sh   # log level override
+#   VSPHERE_STATE_DIR=/data/vsphere bash start.sh  # custom state dir
+# Note: repo root has a separate install.sh for doc-translator (Node) — not this one.
 PORT="8080"
 DEBUG_ARGS=()
 for arg in "$@"; do
@@ -22,6 +24,11 @@ for arg in "$@"; do
   esac
 done
 
+# Support VSPHERE_STATE_DIR for unified state path (also used by crypto/store/state/ippool)
+if [ -n "${VSPHERE_STATE_DIR:-}" ]; then
+  mkdir -p "$VSPHERE_STATE_DIR" 2>/dev/null || true
+fi
+
 # Resolve the interpreter (same order as before)
 PYBIN_RESOLVED=""
 if [ -x ".venv/bin/python" ]; then
@@ -37,7 +44,7 @@ fi
 if [ -z "$PYBIN_RESOLVED" ]; then
   for cand in python3.11 python3 python; do
     if command -v "$cand" >/dev/null 2>&1 \
-      && "$cand" -c 'import sys; exit(0 if sys.version_info >= (3,11) else 1)' 2>/dev/null \
+      && "$cand" -c 'import sys; exit(0 if sys.version_info >= (3,9) else 1)' 2>/dev/null \
       && "$cand" -c 'import vsphere_auto' 2>/dev/null; then
       PYBIN_RESOLVED="$cand"; break
     fi

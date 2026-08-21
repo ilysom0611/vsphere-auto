@@ -13,20 +13,21 @@ log = logging.getLogger(__name__)
 
 
 def _resolve_conn(data: dict):
-    creds_id = data.get("credsId") or data.get("credsRef")
-    if creds_id is not None:
-        c = resolve_creds(str(creds_id)) or get_creds(int(creds_id)) if str(creds_id).isdigit() else resolve_creds(str(creds_id))
-        if not c and str(creds_id).isdigit():
-            from ...creds.store import get_creds as gc
-
-            c = gc(int(creds_id))
+    raw = data.get("credsId") if data.get("credsId") is not None else data.get("credsRef")
+    if raw is not None:
+        ref = str(raw).strip()
+        if not ref:
+            raise ValueError("credsId/credsRef is empty")
+        c = resolve_creds(ref)
         if not c:
-            raise ValueError(f"Credential not found: {creds_id}")
+            raise ValueError(f"Credential not found: {ref}")
         return c.host, c.port, c.username, c.decrypted_password()
-    host = data.get("host") or ""
-    user = data.get("username") or data.get("user") or ""
+    host = (data.get("host") or "").strip()
+    user = (data.get("username") or data.get("user") or "").strip()
     pwd = data.get("password") or ""
     port = int(data.get("port") or 443)
+    if not (1 <= port <= 65535):
+        raise ValueError(f"port out of range: {port}")
     if not host or not user:
         raise ValueError("host and username required (or credsId)")
     return host, port, user, pwd
@@ -38,6 +39,8 @@ def discover_all():
     try:
         host, port, user, pwd = _resolve_conn(data)
     except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
         return jsonify({"error": str(e)}), 400
     datacenter = data.get("datacenter")
     si = None
@@ -65,6 +68,8 @@ def discover_iso():
     try:
         host, port, user, pwd = _resolve_conn(data)
     except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
         return jsonify({"error": str(e)}), 400
     ds = data.get("datastore")
     si = None

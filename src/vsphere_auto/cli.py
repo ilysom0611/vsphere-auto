@@ -1,6 +1,7 @@
 """Typer CLI entry."""
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 from typing import Optional
@@ -14,6 +15,7 @@ creds_app = typer.Typer(help="Manage saved vCenter/ESXi credentials")
 app.add_typer(creds_app, name="creds")
 
 console = Console()
+log = logging.getLogger(__name__)
 
 
 @creds_app.command("list")
@@ -42,7 +44,14 @@ def creds_add(
     from .creds.store import create_creds
 
     pwd = password or os.environ.get("VSPHERE_PASSWORD", "")
-    c = create_creds(name, host, username, pwd, port, type)
+    try:
+        c = create_creds(name, host, username, pwd, port, type)
+    except ValueError as e:
+        console.print(f"[red]{e}[/red]")
+        raise typer.Exit(1)
+    except Exception as e:
+        console.print(f"[red]Failed: {e}[/red]")
+        raise typer.Exit(1)
     console.print(f"[green]Created[/green] {c.to_safe_dict()}")
 
 
@@ -58,7 +67,14 @@ def creds_update(
 ):
     from .creds.store import update_creds
 
-    c = update_creds(id, name=name, host=host, username=username, password=password, port=port, cred_type=type)
+    try:
+        c = update_creds(id, name=name, host=host, username=username, password=password, port=port, cred_type=type)
+    except ValueError as e:
+        console.print(f"[red]{e}[/red]")
+        raise typer.Exit(1)
+    except Exception as e:
+        console.print(f"[red]Failed: {e}[/red]")
+        raise typer.Exit(1)
     if not c:
         console.print(f"[red]Not found: {id}[/red]"); raise typer.Exit(1)
     console.print(f"[green]Updated[/green] {c.to_safe_dict()}")
@@ -90,7 +106,7 @@ def creds_test(id: str = typer.Argument(..., help="Credential ID or name")):
         pwd = c.decrypted_password()
     except Exception as e:
         console.print(f"[red]Failed to decrypt password for {id}: {e}[/red]")
-        if __import__("os").environ.get("VSPHERE_DEBUG"):
+        if os.environ.get("VSPHERE_DEBUG"):
             traceback.print_exc()
         raise typer.Exit(1)
     if not pwd:
@@ -100,7 +116,7 @@ def creds_test(id: str = typer.Argument(..., help="Credential ID or name")):
         res = test_connection(c.host, c.port, c.username, pwd)
     except Exception as e:
         console.print(f"[red]test_connection raised: {e}[/red]")
-        if __import__("os").environ.get("VSPHERE_DEBUG"):
+        if os.environ.get("VSPHERE_DEBUG"):
             traceback.print_exc()
         # Also return a structured error so callers can parse it
         console.print(json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False, indent=2))
@@ -134,16 +150,21 @@ def discover(
     password = password or os.environ.get("VSPHERE_PASSWORD", "")
     if not host or not user:
         console.print("[red]host and user required (or --creds)[/red]"); raise typer.Exit(1)
-    si = connect(host, port, user, password)
+    si = None
     try:
+        si = connect(host, port, user, password)
         inv = discover(si)
         save_inventory(inv)
         console.print(json.dumps(inv, ensure_ascii=False, indent=2))
         if out:
             Path(out).write_text(json.dumps(inv, ensure_ascii=False, indent=2), encoding="utf-8")
             console.print(f"[green]Saved to {out}[/green]")
+    except Exception as e:
+        console.print(f"[red]Discover failed: {e}[/red]")
+        raise typer.Exit(1)
     finally:
-        disconnect(si)
+        if si is not None:
+            disconnect(si)
 
 
 @app.command()
@@ -157,10 +178,15 @@ def plan(config: str = typer.Option(..., "--config", "-c", help="Config YAML pat
     cfg = load_config(config)
     if creds:
         cfg.vcenter.credsRef = creds
-    cfg_dict = cfg.model_dump()
+    # compat pydantic v1/v2
+    cfg_dict = cfg.model_dump() if hasattr(cfg, "model_dump") else cfg.dict()  # type: ignore
     inv = load_inventory_any()
     sel = auto_select_all(inv or {}, cfg_dict) if inv else {}
-    vms = expand_batch(cfg_dict)
+    try:
+        vms = expand_batch(cfg_dict)
+    except ValueError as e:
+        console.print(f"[red]{e}[/red]")
+        raise typer.Exit(1)
     console.print("[bold]Selection[/bold]"); console.print(json.dumps(sel, ensure_ascii=False, indent=2))
     console.print(f"[bold]VMs: {len(vms)}[/bold]"); console.print(json.dumps(vms, ensure_ascii=False, indent=2))
 
@@ -176,14 +202,23 @@ def deploy(config: str = typer.Option(..., "--config", "-c", help="Config YAML p
     cfg = load_config(config)
     if creds:
         cfg.vcenter.credsRef = creds
-    host, port, user, pwd = resolve_vcenter_creds(cfg)
-    if not host or not user:
-        console.print("[red]vCenter host/user not resolved[/red]"); raise typer.Exit(1)
-    cfg_dict = cfg.model_dump()
-    vms = expand_batch(cfg_dict)
+    try:
+        host, port, user, pwd = resolve_vcenter_creds(cfg)
+    except ValueError as e:
+        console.print(f"[red]{e}[/red]"); raise typer.Exit(1)
+    cfg_dict = cfg.model_dump() if hasattr(cfg, "model_dump") else cfg.dict()  # type: ignore
+    try:
+        vms = expand_batch(cfg_dict)
+    except ValueError as e:
+        console.print(f"[red]{e}[/red]"); raise typer.Exit(1)
     if not vms:
         console.print("[red]No VMs to deploy[/red]"); raise typer.Exit(1)
     if not yes:
+        # Non-TTY (CI) should not hang on confirm
+        import sys
+
+        if not sys.stdin.isatty():
+            console.print("[red]Refusing to prompt in non-TTY; use --yes[/red]"); raise typer.Exit(1)
         console.print(f"Deploy {len(vms)} VM(s) to {host}? Use --yes to skip prompt.")
         if not typer.confirm("Continue?"):
             raise typer.Exit(0)
@@ -200,24 +235,40 @@ def deploy(config: str = typer.Option(..., "--config", "-c", help="Config YAML p
         name = vm.get("name")
         template = vm.get("template")
         iso = vm.get("iso")
-        cpu = int(vm.get("cpu") or 2)
-        mem = int(vm.get("memoryMB") or 4096)
+        cpu_raw = vm.get("cpu")
+        mem_raw = vm.get("memoryMB")
+        cpu = int(cpu_raw) if cpu_raw is not None else 2
+        mem = int(mem_raw) if mem_raw is not None else 4096
         folder = vm.get("folder") or defaults.get("folder")
         guest_id = vm.get("guestId") or defaults.get("guestId") or "ubuntu64Guest"
         nets = vm.get("networks") or []
         ip = nets[0].get("ip") if nets else None
         netmask = ippool.get("netmask")
         gateway = ippool.get("gateway")
+        # multi-NIC support
+        nics = None
+        if nets and len(nets) > 1:
+            nics = []
+            for n in nets:
+                _ip = n.get("ip")
+                if _ip == "auto":
+                    _ip = None
+                nics.append({"ip": _ip, "netmask": ippool.get("netmask"), "gateway": ippool.get("gateway")})
         custom = None
-        if ip and ip not in ("auto", "dhcp"):
+        if (ip and ip not in ("auto", "dhcp")) or nics is not None:
             try:
                 from .vsphere.customization import build_linux_customization
 
-                custom = build_linux_customization(name, "", ippool.get("dns"), ip, netmask, gateway)
-            except Exception:
+                if nics is not None:
+                    custom = build_linux_customization(name, "", ippool.get("dns"), nics=nics)
+                else:
+                    custom = build_linux_customization(name, "", ippool.get("dns"), ip, netmask, gateway)
+            except Exception as e:
+                log.warning("build_linux_customization for %s failed: %s", name, e)
                 custom = None
-        si = connect(host, port, user, pwd)
+        si = None
         try:
+            si = connect(host, port, user, pwd)
             from .vsphere.deploy import find_vm, clone_from_template, create_vm_from_iso
             from .vsphere.tasks import wait_for_task
 
@@ -225,7 +276,7 @@ def deploy(config: str = typer.Option(..., "--config", "-c", help="Config YAML p
             if find_vm(content, name, folder) is not None:
                 return {"ok": True, "skipped": True}
             if template:
-                task = clone_from_template(si, template, name, vc.get("datacenter"), vc.get("cluster") if vc.get("cluster") != "auto" else None, vc.get("datastore") if vc.get("datastore") != "auto" else None, folder, cpu=cpu, memory_mb=mem, customization_spec=custom)
+                task = clone_from_template(si, template, name, vc.get("datacenter"), vc.get("cluster") if vc.get("cluster") != "auto" else None, vc.get("datastore") if vc.get("datastore") != "auto" else None, folder, cpu=cpu, memory_mb=mem, disk_gb=int(vm.get("diskGB")) if vm.get("diskGB") is not None else None, customization_spec=custom)
                 res = wait_for_task(task, timeout=1800)
                 return {"ok": res["state"] == "success", "error": res.get("error")}
             elif iso:
@@ -238,12 +289,18 @@ def deploy(config: str = typer.Option(..., "--config", "-c", help="Config YAML p
                 if not ds_name:
                     return {"ok": False, "error": "Datastore required for ISO"}
                 vm_obj = create_vm_from_iso(si, name, ds_name, iso, guest_id, cpu, mem, int(vm.get("diskGB") or 40), None, folder, vc.get("datacenter"))
+                if not vm_obj:
+                    return {"ok": False, "error": "CreateVM returned no VM object"}
                 return {"ok": True, "moid": getattr(vm_obj, "_moId", "") if vm_obj else ""}
             return {"ok": False, "error": "template or iso required"}
         finally:
-            disconnect(si)
+            if si is not None:
+                disconnect(si)
 
-    concurrency = int((cfg_dict.get("batch") or {}).get("concurrency") or 5)
+    try:
+        concurrency = int((cfg_dict.get("batch") or {}).get("concurrency") or 5)
+    except (TypeError, ValueError):
+        concurrency = 5
     on_error = (cfg_dict.get("batch") or {}).get("onError") or "continue"
     result = run_batch(batch_id, vms, deploy_one, concurrency=concurrency, on_error=on_error)
     console.print(result)

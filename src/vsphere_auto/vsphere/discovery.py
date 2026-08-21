@@ -6,6 +6,7 @@ availability vary across versions so every access is guarded.
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 log = logging.getLogger(__name__)
@@ -176,10 +177,13 @@ def discover(si, datacenter: str | None = None) -> dict[str, Any]:
         result["isoImages"] = []
 
         # Helpful counts for the UI
+        _clusters = result.get("clusters", [])
+        _standalone = result.get("standaloneHosts", [])
+        _host_count = sum(c.get("hostCount", 0) for c in _clusters) if _clusters else len(_standalone)
         result["summary"] = {
             "datacenters": len(result.get("datacenters", [])),
-            "clusters": len(result.get("clusters", [])),
-            "hosts": len(result.get("clusters", [])) and sum(c.get("hostCount", 0) for c in result["clusters"]) or len(result.get("standaloneHosts", [])),
+            "clusters": len(_clusters),
+            "hosts": _host_count,
             "datastores": len(result.get("datastores", [])),
             "networks": len(result.get("networks", [])),
             "templates": len(result.get("templates", [])),
@@ -217,6 +221,7 @@ def scan_iso_images(si, datastore_name: str | None = None) -> list[dict[str, Any
 
     isos: list[dict[str, Any]] = []
     for ds in datastores:
+        task = None
         try:
             browser = getattr(ds, "browser", None)
             if browser is None:
@@ -225,13 +230,14 @@ def scan_iso_images(si, datastore_name: str | None = None) -> list[dict[str, Any
             spec.matchPattern = ["*.iso"]
             ds_path = f"[{getattr(ds, 'name', '')}] "
             task = browser.SearchDatastoreSubFolders_Task(ds_path, spec)
-            # poll with timeout
-            import time
-
             deadline = time.monotonic() + 30
             while task.info.state not in ("success", "error"):
                 if time.monotonic() > deadline:
                     log.warning("scan_iso_images: timeout on datastore %s", getattr(ds, "name", ""))
+                    try:
+                        task.CancelTask()
+                    except Exception:
+                        pass
                     break
                 time.sleep(0.5)
             if task.info.state == "success" and task.info.result:
@@ -248,6 +254,13 @@ def scan_iso_images(si, datastore_name: str | None = None) -> list[dict[str, Any
                         )
         except Exception as e:
             log.warning("scan_iso_images: datastore %s: %s", getattr(ds, "name", ""), e)
+            # best-effort cancel orphan task
+            if task is not None:
+                try:
+                    if getattr(getattr(task, "info", None), "state", None) not in ("success", "error"):
+                        task.CancelTask()
+                except Exception:
+                    pass
             continue
     return isos
 

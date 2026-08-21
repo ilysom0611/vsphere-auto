@@ -11,9 +11,18 @@ from typing import Any, Optional
 DEFAULT_DB = Path("state/batch.db")
 
 
+def _resolve_state_dir(state_dir: Path | None) -> Path | None:
+    # Explicit env override takes precedence for path unification
+    env = os.environ.get("VSPHERE_STATE_DIR")
+    if env:
+        return Path(env)
+    return state_dir
+
+
 def _db_path(state_dir: Path | None = None) -> Path:
-    if state_dir:
-        return Path(state_dir) / "batch.db"
+    sd = _resolve_state_dir(state_dir)
+    if sd:
+        return Path(sd) / "batch.db"
     if Path("vsphere-auto/state").exists():
         return Path("vsphere-auto/state/batch.db")
     return DEFAULT_DB
@@ -21,8 +30,21 @@ def _db_path(state_dir: Path | None = None) -> Path:
 
 def _connect(db: Path) -> sqlite3.Connection:
     db.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(db))
+    conn = sqlite3.connect(str(db), timeout=10.0, check_same_thread=False)
     conn.row_factory = sqlite3.Row
+    # Best-effort WAL + busy timeout for concurrent writers (CentOS 7.9 may not support WAL)
+    try:
+        conn.execute("PRAGMA journal_mode=WAL;")
+    except Exception:
+        pass
+    try:
+        conn.execute("PRAGMA busy_timeout=5000;")
+    except Exception:
+        pass
+    try:
+        conn.execute("PRAGMA synchronous=NORMAL;")
+    except Exception:
+        pass
     return conn
 
 
@@ -56,6 +78,11 @@ def init_db(state_dir: Path | None = None) -> Path:
             )
             """
         )
+        # Index for batch-scoped task listing
+        try:
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_batch_id ON tasks(batch_id)")
+        except Exception:
+            pass
         conn.commit()
         try:
             os.chmod(db, 0o600)
@@ -74,9 +101,12 @@ def create_batch(batch_id: str, config: dict[str, Any], state_dir: Path | None =
     init_db(state_dir)
     conn = _connect(_db_path(state_dir))
     try:
+        # Preserve created_at on replace
+        row = conn.execute("SELECT created_at FROM batches WHERE id=?", (batch_id,)).fetchone()
+        created = row["created_at"] if row and row["created_at"] else _now()
         conn.execute(
             "INSERT OR REPLACE INTO batches (id, config_json, status, created_at, updated_at) VALUES (?,?,?,?,?)",
-            (batch_id, json.dumps(config, ensure_ascii=False), "pending", _now(), _now()),
+            (batch_id, json.dumps(config, ensure_ascii=False), "pending", created, _now()),
         )
         conn.commit()
     finally:
@@ -107,9 +137,11 @@ def upsert_task(task_id: str, batch_id: str, vm_name: str, spec_hash: str, statu
     init_db(state_dir)
     conn = _connect(_db_path(state_dir))
     try:
+        row = conn.execute("SELECT created_at FROM tasks WHERE id=?", (task_id,)).fetchone()
+        created = row["created_at"] if row and row["created_at"] else _now()
         conn.execute(
             "INSERT OR REPLACE INTO tasks (id, batch_id, vm_name, spec_hash, status, spec_json, result_json, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
-            (task_id, batch_id, vm_name, spec_hash, status, json.dumps(spec, ensure_ascii=False), json.dumps(result or {}, ensure_ascii=False), _now(), _now()),
+            (task_id, batch_id, vm_name, spec_hash, status, json.dumps(spec, ensure_ascii=False), json.dumps(result or {}, ensure_ascii=False), created, _now()),
         )
         conn.commit()
     finally:
@@ -141,5 +173,16 @@ def get_task(task_id: str, state_dir: Path | None = None) -> dict[str, Any] | No
 
 def next_batch_id(state_dir: Path | None = None) -> str:
     init_db(state_dir)
-    batches = list_batches(state_dir)
-    return f"batch-{len(batches)+1:04d}"
+    conn = _connect(_db_path(state_dir))
+    try:
+        row = conn.execute("SELECT COALESCE(MAX(CAST(substr(id, 7) AS INTEGER)), 0) FROM batches").fetchone()
+        n = int(row[0] or 0) + 1 if row else 1
+        # Ensure no collision with existing id (in case of manual inserts)
+        while True:
+            candidate = f"batch-{n:04d}"
+            exists = conn.execute("SELECT 1 FROM batches WHERE id=?", (candidate,)).fetchone()
+            if not exists:
+                return candidate
+            n += 1
+    finally:
+        conn.close()

@@ -3,7 +3,7 @@ name = "vsphere-auto"
 version = "0.1.0"
 description = "vSphere automated batch VM deployment with auto resource selection, idempotency and robustness"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.9"
 dependencies = [
     "flask>=3.0",
     "pyvmomi>=7.0",
@@ -29,10 +29,10 @@ packages = ["src/vsphere_auto"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py39"
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.9"
 warn_return_any = true
 warn_unused_configs = true
 ignore_missing_imports = true

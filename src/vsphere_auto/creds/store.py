@@ -11,6 +11,7 @@ from typing import Optional
 from .crypto import encrypt_password, decrypt_password
 
 DEFAULT_DB = Path("state/creds.db")
+STATE_ENV = "VSPHERE_STATE_DIR"
 
 
 @dataclass
@@ -45,6 +46,9 @@ class Creds:
 
 
 def _db_path(state_dir: Path | None = None) -> Path:
+    env = os.environ.get(STATE_ENV)
+    if env:
+        return Path(env) / "creds.db"
     if state_dir:
         return Path(state_dir) / "creds.db"
     # prefer vsphere-auto/state when running from repo root
@@ -55,8 +59,16 @@ def _db_path(state_dir: Path | None = None) -> Path:
 
 def _connect(db: Path) -> sqlite3.Connection:
     db.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(db))
+    conn = sqlite3.connect(str(db), timeout=10.0, check_same_thread=False)
     conn.row_factory = sqlite3.Row
+    try:
+        conn.execute("PRAGMA busy_timeout=5000;")
+    except Exception:
+        pass
+    try:
+        conn.execute("PRAGMA journal_mode=WAL;")
+    except Exception:
+        pass
     return conn
 
 
@@ -127,12 +139,24 @@ def get_by_name(name: str, state_dir: Path | None = None) -> Optional[Creds]:
 
 
 def resolve_creds(ref: str, state_dir: Path | None = None) -> Optional[Creds]:
-    """Resolve by id (numeric string) or name."""
+    """Resolve by id (numeric string) or name.
+
+    If ref is all digits, try get_by_name first for names like "123" — only
+    fall back to ID lookup if no name matches. This avoids misclassifying
+    numeric names as IDs.
+    """
+    # Try name first (handles numeric names like "123")
+    c = get_by_name(ref, state_dir)
+    if c:
+        return c
     if ref.isdigit():
-        c = get_creds(int(ref), state_dir)
-        if c:
-            return c
-    return get_by_name(ref, state_dir)
+        try:
+            c2 = get_creds(int(ref), state_dir)
+            if c2:
+                return c2
+        except Exception:
+            pass
+    return None
 
 
 def create_creds(
@@ -144,16 +168,29 @@ def create_creds(
     cred_type: str = "vcenter",
     state_dir: Path | None = None,
 ) -> Creds:
+    if not name or not name.strip():
+        raise ValueError("name required")
+    if not host or not host.strip():
+        raise ValueError("host required")
+    if not (1 <= int(port) <= 65535):
+        raise ValueError(f"port out of range: {port}")
+    if cred_type not in ("vcenter", "esxi"):
+        raise ValueError(f"type must be vcenter|esxi, got {cred_type!r}")
     db = _db_path(state_dir)
     init_db(state_dir)
     enc = encrypt_password(password, state_dir) if password else ""
     now = _now()
     conn = _connect(db)
     try:
-        cur = conn.execute(
-            "INSERT INTO endpoints (name, host, port, username, password_enc, type, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)",
-            (name, host, port, username, enc, cred_type, now, now),
-        )
+        try:
+            cur = conn.execute(
+                "INSERT INTO endpoints (name, host, port, username, password_enc, type, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)",
+                (name.strip(), host.strip(), int(port), username.strip(), enc, cred_type, now, now),
+            )
+        except sqlite3.IntegrityError as e:
+            if "UNIQUE" in str(e) or "unique" in str(e).lower():
+                raise ValueError(f"Name already exists: {name}") from e
+            raise
         conn.commit()
         return get_creds(cur.lastrowid, state_dir)  # type: ignore
     finally:
@@ -170,6 +207,10 @@ def update_creds(
     cred_type: str | None = None,
     state_dir: Path | None = None,
 ) -> Optional[Creds]:
+    if port is not None and not (1 <= int(port) <= 65535):
+        raise ValueError(f"port out of range: {port}")
+    if cred_type is not None and cred_type not in ("vcenter", "esxi"):
+        raise ValueError(f"type must be vcenter|esxi, got {cred_type!r}")
     db = _db_path(state_dir)
     init_db(state_dir)
     conn = _connect(db)
@@ -177,24 +218,28 @@ def update_creds(
         row = conn.execute("SELECT * FROM endpoints WHERE id=?", (creds_id,)).fetchone()
         if not row:
             return None
-        cur = dict(row)
-        if name is not None:
-            cur["name"] = name
-        if host is not None:
-            cur["host"] = host
-        if port is not None:
-            cur["port"] = port
-        if username is not None:
-            cur["username"] = username
+        # Build single UPDATE to avoid lost-update race
+        enc: str | None = None
         if password is not None:
-            cur["password_enc"] = encrypt_password(password, state_dir) if password else ""
-        if cred_type is not None:
-            cur["type"] = cred_type
-        cur["updated_at"] = _now()
-        conn.execute(
-            "UPDATE endpoints SET name=?, host=?, port=?, username=?, password_enc=?, type=?, updated_at=? WHERE id=?",
-            (cur["name"], cur["host"], cur["port"], cur["username"], cur["password_enc"], cur["type"], cur["updated_at"], creds_id),
-        )
+            enc = encrypt_password(password, state_dir) if password else ""
+        # Use COALESCE pattern via Python-level merge but single statement
+        cur = dict(row)
+        new_name = name.strip() if name is not None else cur["name"]
+        new_host = host.strip() if host is not None else cur["host"]
+        new_port = int(port) if port is not None else cur["port"]
+        new_user = username.strip() if username is not None else cur["username"]
+        new_enc = enc if enc is not None else cur["password_enc"]
+        new_type = cred_type if cred_type is not None else cur["type"]
+        new_updated = _now()
+        try:
+            conn.execute(
+                "UPDATE endpoints SET name=?, host=?, port=?, username=?, password_enc=?, type=?, updated_at=? WHERE id=?",
+                (new_name, new_host, new_port, new_user, new_enc, new_type, new_updated, creds_id),
+            )
+        except sqlite3.IntegrityError as e:
+            if "UNIQUE" in str(e) or "unique" in str(e).lower():
+                raise ValueError(f"Name already exists: {new_name}") from e
+            raise
         conn.commit()
         return get_creds(creds_id, state_dir)
     finally:

@@ -22,7 +22,11 @@ class VCenterConfig(BaseModel):
     credsRef: Optional[str] = None  # reference to saved creds name/id
 
     def effective_user(self) -> Optional[str]:
-        return self.user or self.username
+        u = (self.user or "").strip()
+        if u:
+            return u
+        un = (self.username or "").strip()
+        return un or None
 
 
 class DefaultsConfig(BaseModel):
@@ -77,13 +81,19 @@ def load_config(path: str | Path) -> AppConfig:
     p = Path(path)
     if not p.exists():
         raise FileNotFoundError(f"Config not found: {p}")
-    data = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+    raw_text = p.read_text(encoding="utf-8")
+    data = yaml.safe_load(raw_text) or {}
+    # Track which keys were explicitly in YAML for port handling
+    _raw_vc = data.get("vcenter") if isinstance(data.get("vcenter"), dict) else {}
     # env interpolation for password
     if isinstance(data.get("vcenter"), dict) and not data["vcenter"].get("password"):
         env_pwd = os.environ.get("VSPHERE_PASSWORD")
         if env_pwd:
             data["vcenter"]["password"] = env_pwd
-    return AppConfig.model_validate(data)
+    cfg = AppConfig.model_validate(data)
+    # stash raw port presence for resolve
+    object.__setattr__(cfg.vcenter, "_raw_has_port", "port" in _raw_vc)
+    return cfg
 
 
 def resolve_vcenter_creds(cfg: AppConfig, state_dir: Path | None = None) -> tuple[str, int, str, str]:
@@ -96,16 +106,21 @@ def resolve_vcenter_creds(cfg: AppConfig, state_dir: Path | None = None) -> tupl
         if not creds:
             raise ValueError(f"credsRef not found: {vc.credsRef}")
         pwd = creds.decrypted_password(state_dir)
-        # allow override host/user from config if explicitly set
-        host = vc.host or creds.host
+        host = (vc.host or "").strip() or creds.host
         user = vc.effective_user() or creds.username
-        port = vc.port if vc.host else creds.port
+        # Only override port if explicitly set in YAML
+        has_port = getattr(vc, "_raw_has_port", False)
+        port = vc.port if has_port and (vc.host or "").strip() else creds.port
+        if not host or not user:
+            raise ValueError(f"vCenter host/user not resolved (host={host!r} user={user!r})")
         return host, port, user, pwd
-    host = vc.host or ""
-    user = vc.effective_user() or ""
-    pwd = vc.password or os.environ.get("VSPHERE_PASSWORD", "")
+    host = (vc.host or "").strip()
+    user = (vc.effective_user() or "").strip()
+    pwd = (vc.password or "").strip() or os.environ.get("VSPHERE_PASSWORD", "").strip()
     # also support password file
     pwd_file = os.environ.get("VSPHERE_PASSWORD_FILE")
     if not pwd and pwd_file and Path(pwd_file).exists():
         pwd = Path(pwd_file).read_text(encoding="utf-8").strip()
+    if not host or not user:
+        raise ValueError(f"vCenter host/user not resolved (host={host!r} user={user!r}) — set vcenter.host/user or credsRef")
     return host, vc.port, user, pwd

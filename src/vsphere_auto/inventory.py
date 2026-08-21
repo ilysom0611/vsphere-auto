@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -11,6 +13,9 @@ TTL_SECONDS = 3600
 
 
 def _inv_path(state_dir: Path | None = None) -> Path:
+    env = os.environ.get("VSPHERE_STATE_DIR")
+    if env:
+        return Path(env) / "inventory.json"
     if state_dir:
         return Path(state_dir) / "inventory.json"
     if Path("vsphere-auto/state").exists():
@@ -21,8 +26,25 @@ def _inv_path(state_dir: Path | None = None) -> Path:
 def save_inventory(data: dict[str, Any], state_dir: Path | None = None) -> Path:
     p = _inv_path(state_dir)
     p.parent.mkdir(parents=True, exist_ok=True)
-    data["_saved_at"] = time.time()
-    p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    # Do not mutate caller dict
+    to_save = dict(data)
+    to_save["_saved_at"] = time.time()
+    fd, tmp = tempfile.mkstemp(dir=str(p.parent), prefix=".inventory.")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(json.dumps(to_save, ensure_ascii=False, indent=2))
+            f.flush()
+            try:
+                os.fsync(f.fileno())
+            except Exception:
+                pass
+        os.replace(tmp, p)
+    finally:
+        try:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+        except Exception:
+            pass
     return p
 
 
