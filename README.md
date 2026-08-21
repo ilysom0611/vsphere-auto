@@ -8,8 +8,9 @@ Automated, **Linux-first** batch VM deployment for **vSphere (vCenter / ESXi)**.
 
 ## Prerequisites
 
-- **OS:** Linux (Ubuntu 20.04+ / RHEL 8+ / any systemd host). macOS works for development.
-- **Python:** 3.11 or newer (`python3 --version`). If missing: `sudo apt install python3.11 python3.11-venv python3-pip` (Debian/Ubuntu) or `sudo dnf install python3.11` (RHEL/CentOS).
+- **OS:** Linux (Ubuntu 20.04+ / RHEL 8+ / CentOS 7 / any systemd host). macOS works for development.
+- **Python:** 3.11 or newer. `install.sh` auto-provisions Python 3.11 on CentOS 7 via `uv` (no root) or SCL/yum — just run `bash install.sh`.
+  Manual install if needed: `sudo apt install python3.11 python3.11-venv python3-pip` (Debian/Ubuntu) or `sudo dnf install python3.11` (RHEL/Rocky).
 - **Network:** Reachability to vCenter/ESXi on port 443.
 - **vSphere access:** An account with permissions to create/clone VMs, read datastores/networks/folders, and run guest customization (e.g. `Administrator@vsphere.local` or a custom role).
 - **Optional:** `uv` (faster installs; `pip` works fine without it). Install via `curl -LsSf https://astral.sh/uv/install.sh | sh`.
@@ -87,12 +88,26 @@ vsphere-auto --help
 bash start.sh  # http://localhost:8080
 ```
 
-**RHEL / CentOS / Rocky (dnf):**
+**RHEL / Rocky 8+ (dnf):**
 
 ```bash
 sudo dnf install -y python3.11 python3-pip git curl
 git clone https://github.com/ilysom0611/vsphere-auto.git && cd vsphere-auto
 bash install.sh && bash start.sh
+```
+
+**CentOS 7:**
+
+```bash
+# install.sh auto-installs Python 3.11 via uv (no root needed).
+# Network access to pypi.org is required; offline hosts need Python 3.11 preinstalled.
+git clone https://github.com/ilysom0611/vsphere-auto.git && cd vsphere-auto
+bash install.sh          # pulls Python 3.11, upgrades pip, installs deps
+bash start.sh            # uses the provisioned interpreter automatically
+# If auto-provision fails (offline/no curl):
+#   curl -LsSf https://astral.sh/uv/install.sh | sh; export PATH="$HOME/.local/bin:$PATH"
+#   uv python install 3.11; bash install.sh
+#   # or: yum install centos-release-scl && yum install rh-python311 && scl enable rh-python311 bash
 ```
 
 **Using uv (any distro):**
@@ -115,7 +130,7 @@ vsphere-auto --help
 python3 -m vsphere_auto serve --port 8080
 ```
 
-> `install.sh` picks `uv sync` or `pip install -e .` automatically, creates `state/` and the encryption key `state/.fernet.key` (0600), and prints next steps.
+> `install.sh` auto-provisions **Python 3.11** when missing (CentOS 7 included: via `uv` without root), picks `uv sync` or `pip install -e .` automatically, creates `state/` and the encryption key `state/.fernet.key` (0600), and records the interpreter to `state/.python_bin` for `start.sh`.
 
 ---
 
