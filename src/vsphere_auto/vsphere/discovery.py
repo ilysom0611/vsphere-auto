@@ -122,7 +122,7 @@ def _collect_inventory(content, timeout: int = _VIEW_TIMEOUT) -> list[Any]:
         try:
             pc = content.propertyCollector
             view = content.viewManager.CreateContainerView(content.rootFolder, view_types, True)
-            filter_spec = vim.PropertyFilterSpec(
+            filter_kwargs: dict[str, Any] = dict(
                 objectSet=[vim.ObjectSpec(obj=view)],
                 propSet=[
                     _spec(vim.Datacenter, ["name"]),
@@ -135,8 +135,12 @@ def _collect_inventory(content, timeout: int = _VIEW_TIMEOUT) -> list[Any]:
                     _spec(vim.ResourcePool, ["name"]),
                     _spec(vim.VirtualMachine, _VM_PATHS),
                 ],
-                reportMissingObjectsInViews=True,
             )
+            # Field added in newer API versions — pyVmomi only knows it when its
+            # type info was negotiated against a recent vCenter (6.7 lacks it).
+            if "reportMissingObjectsInViews" in getattr(vim.PropertyFilterSpec, "_propInfo", {}):
+                filter_kwargs["reportMissingObjectsInViews"] = True
+            filter_spec = vim.PropertyFilterSpec(**filter_kwargs)
             holder.append(pc.RetrieveProperties([filter_spec]))
         except BaseException as e:  # noqa: BLE001 - propagated to caller below
             exc_holder.append(e)
