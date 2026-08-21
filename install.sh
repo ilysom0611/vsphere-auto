@@ -302,9 +302,10 @@ fi
 
 echo ""
 echo "--- Security notes ---"
-echo "  * The Web UI binds 127.0.0.1 by default (start.sh honours VSPHERE_HOST)."
-echo "    Do NOT expose it remotely without setting VSPHERE_API_TOKEN first and/or"
-echo "    putting a reverse proxy with auth/TLS in front of port 8080."
+echo "  * The Web UI binds 0.0.0.0 by default (reachable from other hosts;"
+echo "    start.sh honours VSPHERE_HOST=127.0.0.1 to restrict to loopback)."
+echo "    Set VSPHERE_API_TOKEN and/or put a reverse proxy with auth/TLS in"
+echo "    front of port 8080 before exposing it on an untrusted network."
 echo "  * Consider firewalld rules for port 8080 if you do expose it:"
 echo "    firewall-cmd --add-port=8080/tcp --permanent && firewall-cmd --reload"
 echo "----------------------"

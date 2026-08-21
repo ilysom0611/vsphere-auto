@@ -12,7 +12,7 @@ User=vsphereauto
 Group=vsphereauto
 WorkingDirectory=/opt/vsphere-auto
 Environment=VSPHERE_STATE_DIR=/opt/vsphere-auto/state
-ExecStart=/opt/vsphere-auto/.venv/bin/vsphere-auto serve --host 127.0.0.1 --port 8080
+ExecStart=/opt/vsphere-auto/.venv/bin/vsphere-auto serve --host 0.0.0.0 --port 8080
 Restart=on-failure
 RestartSec=5
 # --- Hardening ---
@@ -22,8 +22,12 @@ ReadWritePaths=/opt/vsphere-auto/state -/opt/vsphere-auto
 PrivateTmp=yes
 ProtectHome=yes
 # VSPHERE_AUTO_KEY is loaded from state/.fernet.key; set only if you use an external vault.
-# To expose the UI beyond loopback, override the host (use a reverse proxy in front!):
+# To restrict the UI to loopback only, override the host:
 #   sudo systemctl edit vsphere-auto
+#   [Service]
+#   ExecStart=
+#   ExecStart=/opt/vsphere-auto/.venv/bin/vsphere-auto serve --host 127.0.0.1 --port 8080
+# Recommended: set VSPHERE_API_TOKEN via an environment file when bound to 0.0.0.0:
 # Environment=VSPHERE_AUTO_KEY=
 # EnvironmentFile=/etc/vsphere-auto/env
 

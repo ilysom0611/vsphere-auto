@@ -299,7 +299,7 @@ vsphere-auto creds test <id|name>
 vsphere-auto discover --creds prod-vc [--out inventory.json]
 vsphere-auto plan --config my.yaml [--creds prod-vc]
 vsphere-auto deploy --config my.yaml [--creds prod-vc] [--yes]
-vsphere-auto serve [--host 127.0.0.1] [--port 8080] [--debug]
+vsphere-auto serve [--host 0.0.0.0] [--port 8080] [--debug]
 ```
 
 Exit codes: `0` all succeeded, `2` partial success, `1` failure — easy to check in scripts.
@@ -323,7 +323,7 @@ Or let the installer do it (best-effort; substitutes paths automatically):
 sudo bash install.sh --install-service
 ```
 
-The unit runs as `User=vsphereauto` (create it first or adjust `User=`/`Group=`), sets `VSPHERE_STATE_DIR=/opt/vsphere-auto/state`, restarts on failure after 5 seconds, and binds to `127.0.0.1` — override the host via `systemctl edit` only behind a reverse proxy.
+The unit runs as `User=vsphereauto` (create it first or adjust `User=`/`Group=`), sets `VSPHERE_STATE_DIR=/opt/vsphere-auto/state`, restarts on failure after 5 seconds, and binds to `0.0.0.0` (all interfaces) — restrict to loopback via `systemctl edit` if you only need local access.
 
 Docker: **not yet provided** — there is no Dockerfile in the repository at the moment. Run directly with `install.sh` + `start.sh` or the systemd unit above.
 
@@ -340,8 +340,8 @@ Docker: **not yet provided** — there is no Dockerfile in the repository at the
 
 ## Security
 
-- **Default bind address is `127.0.0.1`.** The UI/API are loopback-only unless you explicitly set `--host 0.0.0.0`, `VSPHERE_HOST=0.0.0.0`, or edit the systemd unit.
-- **Set `VSPHERE_API_TOKEN` before exposing the service remotely** — without it the API is unauthenticated. When the token is set, requests must send it as `Authorization: Bearer <token>` (or `X-API-Token: <token>`).
+- **Default bind address is `0.0.0.0`** — the UI/API are reachable from other hosts out of the box. Set `--host 127.0.0.1`, `VSPHERE_HOST=127.0.0.1`, or edit the systemd unit to restrict to loopback.
+- **Set `VSPHERE_API_TOKEN` when the service is reachable from other hosts** — without it the API is unauthenticated (a loud warning is printed at startup in that case). When the token is set, requests must send it as `Authorization: Bearer <token>` (or `X-API-Token: <token>`).
 - **Use a reverse proxy** (nginx/caddy with TLS + auth) in front of port 8080 for any non-loopback access, and restrict with firewalld:
   ```bash
   firewall-cmd --add-port=8080/tcp --permanent && firewall-cmd --reload
@@ -359,7 +359,7 @@ Docker: **not yet provided** — there is no Dockerfile in the repository at the
 | `VSPHERE_STATE_DIR` | Directory holding all runtime state (`creds.db`, `batch.db`, `ip_pools.json`, `inventory.json`, `.fernet.key`). `start.sh` defaults it to `<repo>/state` so manual starts and systemd share one state dir. | `<repo>/state` |
 | `VSPHERE_AUTO_KEY` | Fernet key used to encrypt stored credentials. Overrides `state/.fernet.key`; set it when using an external secret store or a shared state dir. | auto-generated key file |
 | `VSPHERE_API_TOKEN` | When set, all API requests must present this token (`Authorization: Bearer …` / `X-API-Token`). Required before exposing the UI beyond loopback. | unset (no auth) |
-| `VSPHERE_HOST` | Bind address used by `start.sh` and honoured by the `serve` CLI default. | `127.0.0.1` |
+| `VSPHERE_HOST` | Bind address used by `start.sh` and honoured by the `serve` CLI default. | `0.0.0.0` |
 | `VSPHERE_PASSWORD` | vCenter password for CLI/Web flows that don't use saved credentials. | unset |
 | `VSPHERE_PASSWORD_FILE` | Alternative to `VSPHERE_PASSWORD`: read the password from this file. | unset |
 | `VSPHERE_DEBUG` | `1`/`true` enables Flask debug mode + DEBUG logging (same as `serve --debug`). Debug mode forces loopback binding. | unset |

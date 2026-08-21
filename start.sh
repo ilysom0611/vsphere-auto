@@ -37,9 +37,9 @@ for arg in "$@"; do
   esac
 done
 
-# Support VSPHERE_HOST for the bind address (default loopback — safe by default;
-# set VSPHERE_HOST=0.0.0.0 explicitly to expose the UI, ideally behind a proxy).
-HOST="${VSPHERE_HOST:-127.0.0.1}"
+# Support VSPHERE_HOST for the bind address (default 0.0.0.0 — reachable from
+# other hosts; set VSPHERE_HOST=127.0.0.1 to restrict to loopback).
+HOST="${VSPHERE_HOST:-0.0.0.0}"
 
 # Resolve the interpreter (same order as before)
 PYBIN_RESOLVED=""

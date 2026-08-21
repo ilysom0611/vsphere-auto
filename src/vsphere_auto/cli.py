@@ -339,7 +339,7 @@ def deploy(config: str = typer.Option(..., "--config", "-c", help="Config YAML p
 
 @app.command()
 def serve(
-    host: str = typer.Option("127.0.0.1"),
+    host: str = typer.Option("0.0.0.0", help="Bind address (default: all interfaces; set 127.0.0.1 for loopback-only)"),
     port: int = typer.Option(8080),
     debug: bool = typer.Option(False, "--debug", help="Enable Flask debug + DEBUG log level (or set VSPHERE_DEBUG=1)"),
 ):
@@ -361,6 +361,15 @@ def serve(
         )
         log.warning("--debug requested with non-loopback host %r; forcing 127.0.0.1 for safety", host)
         host = "127.0.0.1"
+
+    # Non-loopback bind without an API token means anyone who can reach the
+    # port can deploy VMs / read stored credentials — warn loudly but allow.
+    if host not in ("127.0.0.1", "::1", "localhost") and not (os.environ.get("VSPHERE_API_TOKEN") or "").strip():
+        console.print(
+            "[yellow]WARNING: serving on a non-loopback address without VSPHERE_API_TOKEN set — "
+            "the API is UNAUTHENTICATED. Set VSPHERE_API_TOKEN or restrict access (firewall/reverse proxy).[/yellow]"
+        )
+        log.warning("non-loopback bind %r without VSPHERE_API_TOKEN; API is unauthenticated", host)
 
     # Logging: DEBUG in debug mode unless LOG_LEVEL is explicitly set.
     level = os.environ.get("LOG_LEVEL") or ("DEBUG" if debug else "INFO")
