@@ -1,6 +1,20 @@
 #!/usr/bin/env bash
 set -e
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# ---------------------------------------------------------------------------
+# Resolve the directory this script lives in — works for:
+#   1) `bash install.sh`      (BASH_SOURCE populated)
+#   2) `curl … | bash`        (BASH_SOURCE empty — reads /proc/self/exe or argv)
+#   3) scripts installed via `pip install -e .` (argv[0] may be the venv path)
+# Fallback chain: BASH_SOURCE → /proc/self/exe → dirname of argv[0] → git rev-parse
+# ---------------------------------------------------------------------------
+if [ -n "${BASH_SOURCE[0]}" ] && [ -f "${BASH_SOURCE[0]}" ]; then
+  _SRC="${BASH_SOURCE[0]}"
+elif [ -L /proc/self/exe ]; then
+  _SRC="$(readlink -f /proc/self/exe 2>/dev/null || true)"
+fi
+# _SRC may still be empty (non-Bash invocers). Fall back to dirname of $0.
+_SCRIPT_DIR="${_SRC:-$0}"
+SCRIPT_DIR="$(cd "$(dirname "$_SCRIPT_DIR")" && pwd)"
 cd "$SCRIPT_DIR"
 echo "Installing vsphere-auto..."
 
