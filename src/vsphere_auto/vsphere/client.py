@@ -6,9 +6,12 @@ rejected by Python 3.11 + OpenSSL 3.x at SECLEVEL 2.  The default
 security level and explicitly allow TLS 1.0+ so old hosts still connect.
 
 Hang fix: some 6.7 stacks cause pyVmomi/SmartConnect to block forever on
-the TLS/SOAP handshake (connectionTimeout + socket timeout don't help).
-We run the connect in a daemon thread and enforce a hard wall-clock
-timeout so `creds test` and `/api/discover` always return within ~15s.
+the TLS/SOAP handshake (connectionTimeout/socket timeout not reliably
+honoured). We run the connect in a daemon thread and enforce a hard
+wall-clock timeout so `creds test` and `/api/discover` always return
+within ~15s.  Note: ThreadPoolExecutor as a context manager waits for
+workers on exit (shutdown wait=True) which defeats the timeout — we use
+shutdown(wait=False) explicitly.
 """
 from __future__ import annotations
 
@@ -57,8 +60,6 @@ def _smartconnect_once(host: str, port: int, user: str, password: str, ctx, time
     kwargs: dict = {"host": host, "port": port, "user": user, "pwd": password}
     if ctx is not None:
         kwargs["sslContext"] = ctx
-    # Some pyVmomi builds accept connectionTimeout; pass it when available.
-    # Inspect signature to avoid TypeError spam — but try anyway.
     try:
         return SmartConnect(connectionTimeout=timeout, **kwargs)
     except TypeError as te:
@@ -77,38 +78,46 @@ def connect(
 ):
     """Return ServiceInstance. Raises RuntimeError on failure/timeout."""
     try:
-        # Import early so missing pyvmomi fails fast with a clear message
         import pyVim.connect  # noqa: F401
     except ImportError as e:
         raise RuntimeError("pyvmomi not installed. Run: pip install pyvmomi") from e
 
     ctx = _create_ssl_context(insecure)
-
-    # Hard wall-clock timeout via a worker thread — this bounds cases where
-    # the underlying socket/SSL handshake blocks indefinitely (observed on
-    # vSphere 6.7 with OpenSSL 3.x).  connectionTimeout/socket.setdefaulttimeout
-    # are best-effort inside the thread, but the outer future timeout is the
-    # actual guarantee.
     orig_timeout = socket.getdefaulttimeout()
     try:
-        # Also set default socket timeout inside the main thread for DNS/TCP
-        # fallbacks that might run outside the worker (defensive).
         try:
             socket.setdefaulttimeout(timeout)
         except Exception:
             pass
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+        # Hard wall-clock timeout via worker thread.  Use explicit
+        # shutdown(wait=False) — the `with` form would block on exit
+        # waiting for the hung thread and defeat the timeout.
+        ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        try:
             fut = ex.submit(_smartconnect_once, host, port, user, password, ctx, timeout)
             try:
                 si = fut.result(timeout=timeout)
             except concurrent.futures.TimeoutError as e:
-                # Don't wait for the stuck thread — it will die with the executor.
+                # Cancel if not yet started; the running thread will be
+                # abandoned (daemon) and reaped when the process exits.
+                try:
+                    fut.cancel()
+                except Exception:
+                    pass
                 raise RuntimeError(
                     f"Connection to {host}:{port} timed out after {timeout}s "
-                    f"(TLS/handshake blocked — check host 443, firewall, and that "
-                    f"vCenter 6.7 ciphers are reachable; curl -vk https://{host}:{port}/sdk should connect)"
+                    f"(TLS/handshake blocked — curl -vk https://{host}:{port}/sdk should connect)"
                 ) from e
+        finally:
+            try:
+                ex.shutdown(wait=False, cancel_futures=True)  # type: ignore[call-arg]
+            except TypeError:
+                # Python <3.9: no cancel_futures
+                try:
+                    ex.shutdown(wait=False)
+                except Exception:
+                    pass
     except RuntimeError:
         raise
     except socket.timeout as e:
