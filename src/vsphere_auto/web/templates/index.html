@@ -1,53 +1,53 @@
 {% extends "base.html" %}
-{% block title %}部署 - vSphere Auto{% endblock %}
+{% block title %}Deploy - vSphere Auto{% endblock %}
 {% block content %}
-<h1>vSphere 批量部署</h1>
+<h1>vSphere Batch Deploy</h1>
 
 <section class="card">
-  <h2>1. 选择 vCenter/ESXi</h2>
+  <h2>1. Select vCenter / ESXi</h2>
   <div class="row">
-    <select id="credsSelect"><option value="">-- 选择已保存凭据 --</option></select>
-    <button id="btnDiscover">🔍 发现资源</button>
+    <select id="credsSelect"><option value="">-- Select saved credential --</option></select>
+    <button id="btnDiscover">Discover Resources</button>
     <span id="discoverStatus" class="muted"></span>
   </div>
   <details>
-    <summary>或临时连接（不保存）</summary>
+    <summary>Or use a temporary connection (not saved)</summary>
     <div class="grid2">
       <input id="tmpHost" placeholder="host (10.0.0.10)">
       <input id="tmpUser" placeholder="user">
       <input id="tmpPass" type="password" placeholder="password">
       <input id="tmpPort" placeholder="443" value="443">
     </div>
-    <button id="btnDiscoverTmp">发现（临时）</button>
+    <button id="btnDiscoverTmp">Discover (temporary)</button>
   </details>
   <pre id="discoverResult" class="pre"></pre>
 </section>
 
 <section class="card">
-  <h2>2. 虚拟机配置</h2>
+  <h2>2. VM Configuration</h2>
   <div id="vmForm" class="grid2">
-    <label>模板 <select id="fTemplate"><option value="">-- auto/请选择 --</option></select></label>
-    <label>ISO <select id="fIso"><option value="">-- 可选 --</option></select></label>
+    <label>Template <select id="fTemplate"><option value="">-- auto / select --</option></select></label>
+    <label>ISO <select id="fIso"><option value="">-- optional --</option></select></label>
     <label>CPU <input id="fCpu" type="number" value="2" min="1"></label>
-    <label>内存 MB <input id="fMem" type="number" value="4096"></label>
-    <label>磁盘 GB <input id="fDisk" type="number" value="40"></label>
-    <label>网络 <select id="fNetwork"><option value="auto">auto</option></select></label>
-    <label>IP <select id="fIp"><option value="auto">auto</option><option value="dhcp">dhcp</option></select> <input id="fIpVal" placeholder="或填 10.0.0.11"></label>
-    <label>文件夹 <input id="fFolder" placeholder="workloads/demo"></label>
-    <label>GuestId <input id="fGuest" value="ubuntu64Guest"></label>
+    <label>Memory MB <input id="fMem" type="number" value="4096"></label>
+    <label>Disk GB <input id="fDisk" type="number" value="40"></label>
+    <label>Network <select id="fNetwork"><option value="auto">auto</option></select></label>
+    <label>IP <select id="fIp"><option value="auto">auto</option><option value="dhcp">dhcp</option></select> <input id="fIpVal" placeholder="or enter 10.0.0.11"></label>
+    <label>Folder <input id="fFolder" placeholder="workloads/demo"></label>
+    <label>Guest ID <input id="fGuest" value="ubuntu64Guest"></label>
   </div>
   <div class="row">
-    <label>数量 <input id="fCount" type="number" value="1" min="1" style="width:80px"></label>
-    <label>命名模板 <input id="fNaming" value="demo-{index:02d}"></label>
-    <label>并发 <input id="fConcurrency" type="number" value="5" min="1" max="20" style="width:80px"></label>
+    <label>Count <input id="fCount" type="number" value="1" min="1" style="width:80px"></label>
+    <label>Naming template <input id="fNaming" value="demo-{index:02d}"></label>
+    <label>Concurrency <input id="fConcurrency" type="number" value="5" min="1" max="20" style="width:80px"></label>
   </div>
   <details>
-    <summary>高级：粘贴 YAML 配置</summary>
+    <summary>Advanced: paste YAML config</summary>
     <textarea id="yamlInput" rows="12" placeholder="vms: [...]"></textarea>
   </details>
   <div class="row">
-    <button id="btnPlan">预览计划</button>
-    <button id="btnDeploy" class="primary">提交部署</button>
+    <button id="btnPlan">Preview Plan</button>
+    <button id="btnDeploy" class="primary">Deploy</button>
   </div>
   <pre id="planResult" class="pre"></pre>
   <div id="deployResult"></div>
@@ -59,39 +59,38 @@ let inventory=null;
 async function loadCreds(){
   const r=await fetch('/api/creds'); const list=await r.json();
   const sel=document.getElementById('credsSelect');
-  sel.innerHTML='<option value="">-- 选择已保存凭据 --</option>';
+  sel.innerHTML='<option value="">-- Select saved credential --</option>';
   list.forEach(c=>{ const o=document.createElement('option'); o.value=c.id; o.textContent=`${c.name} (${c.host})`; sel.appendChild(o); });
 }
 async function doDiscover(useTmp){
   const status=document.getElementById('discoverStatus');
-  status.textContent='发现中...';
+  status.textContent='Discovering...';
   let body={};
   if(useTmp){
     body={host:document.getElementById('tmpHost').value, username:document.getElementById('tmpUser').value, password:document.getElementById('tmpPass').value, port:document.getElementById('tmpPort').value};
   } else {
     const v=document.getElementById('credsSelect').value;
-    if(!v){ status.textContent='请选择凭据或使用临时连接'; return; }
+    if(!v){ status.textContent='Please select a credential or use a temporary connection.'; return; }
     body={credsId:parseInt(v,10)};
   }
   const r=await fetch('/api/discover',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   const j=await r.json();
   inventory=j;
   document.getElementById('discoverResult').textContent=JSON.stringify(j,null,2);
-  status.textContent=r.ok?'完成':'失败';
+  status.textContent=r.ok?'Done':'Failed';
   if(r.ok) fillSelects(j);
 }
 function fillSelects(inv){
-  const t=document.getElementById('fTemplate'); t.innerHTML='<option value="">-- auto/请选择 --</option>';
+  const t=document.getElementById('fTemplate'); t.innerHTML='<option value="">-- auto / select --</option>';
   (inv.templates||[]).forEach(x=>{ const o=document.createElement('option'); o.value=x.name; o.textContent=x.name; t.appendChild(o); });
-  const iso=document.getElementById('fIso'); iso.innerHTML='<option value="">-- 可选 --</option>';
+  const iso=document.getElementById('fIso'); iso.innerHTML='<option value="">-- optional --</option>';
   (inv.isoImages||[]).forEach(x=>{ const o=document.createElement('option'); o.value=x.fullPath||x.path; o.textContent=x.fullPath||x.path; iso.appendChild(o); });
   const net=document.getElementById('fNetwork'); net.innerHTML='<option value="auto">auto</option>';
   (inv.networks||[]).forEach(x=>{ const o=document.createElement('option'); o.value=x.name; o.textContent=x.name; net.appendChild(o); });
 }
 function buildCfg(){
   const yaml=document.getElementById('yamlInput').value.trim();
-  if(yaml){ try{ // simple: if yaml provided, try parse as json fallback
-    // send as raw config via deploy api which accepts json; for yaml we just return empty and let server handle? For now treat as json
+  if(yaml){ try{
     return JSON.parse(yaml);
   }catch(e){ /* ignore, build from form */ }}
   const credsId=document.getElementById('credsSelect').value;

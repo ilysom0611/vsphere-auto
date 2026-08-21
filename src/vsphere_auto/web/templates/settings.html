@@ -1,27 +1,27 @@
 {% extends "base.html" %}
-{% block title %}设置/凭据 - vSphere Auto{% endblock %}
+{% block title %}Settings / Credentials - vSphere Auto{% endblock %}
 {% block content %}
-<h1>设置 / 凭据</h1>
-<p class="muted">保存 vCenter / ESXi 的地址与账号，密码加密落盘（Fernet），可随时更新。部署时可直接引用。</p>
+<h1>Settings / Credentials</h1>
+<p class="muted">Save vCenter / ESXi endpoints and accounts. Passwords are encrypted with Fernet before being written to <code>state/creds.db</code> and can be updated at any time. Deployments can reference them by name.</p>
 
 <section class="card">
-  <h2>已保存凭据</h2>
-  <table id="credsTable" class="table"><thead><tr><th>ID</th><th>名称</th><th>主机</th><th>用户</th><th>类型</th><th>更新</th><th>操作</th></tr></thead><tbody></tbody></table>
+  <h2>Saved Credentials</h2>
+  <table id="credsTable" class="table"><thead><tr><th>ID</th><th>Name</th><th>Host</th><th>User</th><th>Type</th><th>Updated</th><th>Actions</th></tr></thead><tbody></tbody></table>
 </section>
 
 <section class="card">
-  <h2 id="formTitle">新增凭据</h2>
+  <h2 id="formTitle">Add Credential</h2>
   <div class="grid2">
-    <label>名称 <input id="fName" placeholder="prod-vc"></label>
-    <label>主机 <input id="fHost" placeholder="10.0.0.10"></label>
-    <label>端口 <input id="fPort" value="443"></label>
-    <label>类型 <select id="fType"><option value="vcenter">vcenter</option><option value="esxi">esxi</option></select></label>
-    <label>用户名 <input id="fUser" placeholder="administrator@vsphere.local"></label>
-    <label>密码 <input id="fPass" type="password" placeholder="留空表示不改（编辑时）"></label>
+    <label>Name <input id="fName" placeholder="prod-vc"></label>
+    <label>Host <input id="fHost" placeholder="10.0.0.10"></label>
+    <label>Port <input id="fPort" value="443"></label>
+    <label>Type <select id="fType"><option value="vcenter">vcenter</option><option value="esxi">esxi</option></select></label>
+    <label>Username <input id="fUser" placeholder="administrator@vsphere.local"></label>
+    <label>Password <input id="fPass" type="password" placeholder="Leave blank to keep unchanged when editing"></label>
   </div>
   <div class="row">
-    <button id="btnSave">保存</button>
-    <button id="btnCancel" style="display:none">取消编辑</button>
+    <button id="btnSave">Save</button>
+    <button id="btnCancel" style="display:none">Cancel</button>
     <span id="formMsg" class="muted"></span>
   </div>
 </section>
@@ -35,13 +35,13 @@ async function load(){
   list.forEach(c=>{
     const tr=document.createElement('tr');
     tr.innerHTML=`<td>${c.id}</td><td>${c.name}</td><td>${c.host}:${c.port}</td><td>${c.username}</td><td>${c.type}</td><td>${c.updated_at||''}</td>
-    <td><button onclick="testCred(${c.id})">测试</button> <button onclick="editCred(${c.id},'${c.name}','${c.host}',${c.port},'${c.username}','${c.type}')">编辑</button> <button onclick="delCred(${c.id})">删除</button></td>`;
+    <td><button onclick="testCred(${c.id})">Test</button> <button onclick="editCred(${c.id},'${c.name}','${c.host}',${c.port},'${c.username}','${c.type}')">Edit</button> <button onclick="delCred(${c.id})">Delete</button></td>`;
     tb.appendChild(tr);
   });
 }
 function editCred(id,name,host,port,user,type){
   editingId=id;
-  document.getElementById('formTitle').textContent='编辑凭据 #'+id;
+  document.getElementById('formTitle').textContent='Edit Credential #'+id;
   document.getElementById('fName').value=name;
   document.getElementById('fHost').value=host;
   document.getElementById('fPort').value=port;
@@ -52,7 +52,7 @@ function editCred(id,name,host,port,user,type){
 }
 document.getElementById('btnCancel').onclick=()=>{
   editingId=null;
-  document.getElementById('formTitle').textContent='新增凭据';
+  document.getElementById('formTitle').textContent='Add Credential';
   document.getElementById('fName').value=''; document.getElementById('fHost').value=''; document.getElementById('fPort').value='443'; document.getElementById('fUser').value=''; document.getElementById('fPass').value='';
   document.getElementById('btnCancel').style.display='none';
   document.getElementById('formMsg').textContent='';
@@ -62,7 +62,7 @@ async function testCred(id){
   alert(JSON.stringify(j,null,2));
 }
 async function delCred(id){
-  if(!confirm('删除凭据 #'+id+' ?')) return;
+  if(!confirm('Delete credential #'+id+'?')) return;
   await fetch(`/api/creds/${id}`,{method:'DELETE'});
   load();
 }
@@ -71,14 +71,13 @@ document.getElementById('btnSave').onclick=async()=>{
   const pass=document.getElementById('fPass').value;
   if(pass) body.password=pass;
   else if(editingId===null) body.password='';
-  // editing with empty password => omit (unchanged)
   if(editingId!==null && !pass) delete body.password;
   const url=editingId?`/api/creds/${editingId}`:'/api/creds';
   const method=editingId?'PUT':'POST';
   const r=await fetch(url,{method,headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   const j=await r.json();
-  document.getElementById('formMsg').textContent=r.ok?'已保存':'失败: '+(j.error||r.status);
-  if(r.ok){ editingId=null; document.getElementById('formTitle').textContent='新增凭据'; document.getElementById('btnCancel').style.display='none'; document.getElementById('fPass').value=''; load(); }
+  document.getElementById('formMsg').textContent=r.ok?'Saved':'Failed: '+(j.error||r.status);
+  if(r.ok){ editingId=null; document.getElementById('formTitle').textContent='Add Credential'; document.getElementById('btnCancel').style.display='none'; document.getElementById('fPass').value=''; load(); }
 };
 load();
 </script>

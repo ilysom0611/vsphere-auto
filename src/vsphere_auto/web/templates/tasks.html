@@ -1,15 +1,15 @@
 {% extends "base.html" %}
-{% block title %}任务 - vSphere Auto{% endblock %}
+{% block title %}Tasks - vSphere Auto{% endblock %}
 {% block content %}
-<h1>任务</h1>
+<h1>Tasks</h1>
 <div class="row">
-  <button id="btnRefresh">刷新</button>
+  <button id="btnRefresh">Refresh</button>
   <span id="status" class="muted"></span>
 </div>
-<h2>批次</h2>
-<table id="batchTable" class="table"><thead><tr><th>ID</th><th>状态</th><th>创建时间</th><th>操作</th></tr></thead><tbody></tbody></table>
-<h2>明细</h2>
-<table id="taskTable" class="table"><thead><tr><th>ID</th><th>VM</th><th>状态</th><th>更新</th></tr></thead><tbody></tbody></table>
+<h2>Batches</h2>
+<table id="batchTable" class="table"><thead><tr><th>ID</th><th>Status</th><th>Created</th><th>Actions</th></tr></thead><tbody></tbody></table>
+<h2>Details</h2>
+<table id="taskTable" class="table"><thead><tr><th>ID</th><th>VM</th><th>Status</th><th>Updated</th></tr></thead><tbody></tbody></table>
 {% endblock %}
 {% block scripts %}
 <script>
@@ -18,7 +18,7 @@ async function loadBatches(){
   const tb=document.querySelector('#batchTable tbody'); tb.innerHTML='';
   list.forEach(b=>{
     const tr=document.createElement('tr');
-    tr.innerHTML=`<td>${b.id}</td><td>${b.status}</td><td>${b.created_at||''}</td><td><button onclick="loadTasks('${b.id}')">查看</button></td>`;
+    tr.innerHTML=`<td>${b.id}</td><td>${b.status}</td><td>${b.created_at||''}</td><td><button onclick="loadTasks('${b.id}')">View</button></td>`;
     tb.appendChild(tr);
   });
 }
@@ -31,7 +31,7 @@ async function loadTasks(batchId){
     tr.innerHTML=`<td>${t.id}</td><td>${t.vm_name}</td><td>${t.status}</td><td>${t.updated_at||''}</td>`;
     tb.appendChild(tr);
   });
-  document.getElementById('status').textContent='批次 '+batchId+' 共 '+list.length+' 项';
+  document.getElementById('status').textContent='Batch '+batchId+' — '+list.length+' item(s)';
 }
 async function loadAllTasks(){
   const r=await fetch('/api/tasks'); const list=await r.json();
