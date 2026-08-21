@@ -11,8 +11,9 @@ from typing import Any
 
 log = logging.getLogger(__name__)
 
-# Per-view timeout for 6.7 large inventories (CreateContainerView can block)
-_VIEW_TIMEOUT = 15
+# Hard timeout for one bulk retrieval round (slow appliances need ~3s per
+# SOAP call; 60s still catches genuinely hung 6.7 servers)
+_VIEW_TIMEOUT = 60
 
 
 def _get_obj(content, vim_type: list, name: str | None = None):
@@ -131,21 +132,33 @@ def _collect_inventory(content, timeout: int = _VIEW_TIMEOUT) -> list[Any]:
         views = []
         try:
             pc = content.propertyCollector
-            objects: list[Any] = []
-            prop_specs: list[Any] = []
-            for vtype, paths in type_paths:
-                view = content.viewManager.CreateContainerView(content.rootFolder, [vtype], True)
-                views.append(view)
-                objs = list(getattr(view, "view", []) or [])
-                if not objs:
-                    continue
-                objects.extend(objs)
-                # PropertySpec.type must be the vmodl TYPE OBJECT, not its name —
-                # pyVmomi's client-side check rejects str with
-                # 'For "type" expected type type, but got str'.
-                prop_specs.append(vim.PropertySpec(type=vtype, all=False, pathSet=list(paths)))
-            if not objects:
+            # ONE multi-type CreateContainerView (slow appliances need ~2.5s per
+            # SOAP call; 9 per-type views would burn ~25s before retrieval even
+            # starts). view.view is a single bulk response of direct object refs.
+            view_types = [vtype for vtype, _ in type_paths]
+            path_by_type = {vtype.__name__: paths for vtype, paths in type_paths}
+            view = content.viewManager.CreateContainerView(content.rootFolder, view_types, True)
+            views.append(view)
+            raw_objs = list(getattr(view, "view", []) or [])
+            if not raw_objs:
                 return
+            # Dedupe by (exact type name, moid) — subclass types listed in the
+            # same view (ComputeResource ⊇ ClusterComputeResource) can yield
+            # each object once per matching PropertySpec otherwise.
+            objects: list[Any] = []
+            seen: set[tuple[str, str]] = set()
+            for o in raw_objs:
+                key = (type(o).__name__, str(getattr(o, "_moId", "")))
+                if key not in seen:
+                    seen.add(key)
+                    objects.append(o)
+            prop_specs: list[Any] = []
+            for vtype, _paths in type_paths:
+                if any(type(o).__name__ == vtype.__name__ for o in objects):
+                    # PropertySpec.type must be the vmodl TYPE OBJECT, not its
+                    # name — pyVmomi's client-side check rejects str with
+                    # 'For "type" expected type type, but got str'.
+                    prop_specs.append(vim.PropertySpec(type=vtype, all=False, pathSet=list(path_by_type[vtype.__name__])))
             dropped: dict[str, list[str]] = {}
             for attempt in range(6):
                 try:
@@ -192,9 +205,15 @@ def _collect_inventory(content, timeout: int = _VIEW_TIMEOUT) -> list[Any]:
 
 def _group_by_type(objs) -> dict[str, list[Any]]:
     grouped: dict[str, list[Any]] = {}
+    seen: set[tuple[str, str]] = set()
     for oc in objs or []:
         try:
-            grouped.setdefault(type(getattr(oc, "obj", None)).__name__, []).append(oc)
+            obj = getattr(oc, "obj", None)
+            key = (type(obj).__name__, str(getattr(obj, "_moId", "")))
+            if key in seen:
+                continue
+            seen.add(key)
+            grouped.setdefault(type(obj).__name__, []).append(oc)
         except Exception:
             continue
     return grouped
