@@ -62,12 +62,15 @@ def _smartconnect_once(host: str, port: int, user: str, password: str, ctx, time
     kwargs: dict[str, Any] = {"host": host, "port": port, "user": user, "pwd": password}
     if ctx is not None:
         kwargs["sslContext"] = ctx
-    try:
-        return SmartConnect(connectionTimeout=timeout, **kwargs)
-    except TypeError as te:
-        if "connectionTimeout" not in str(te):
-            raise
-        return SmartConnect(**kwargs)
+    # pyVmomi 6.7: connectionTimeout, 8.0/9.1: httpConnectionTimeout. Try both.
+    for key in ("httpConnectionTimeout", "connectionTimeout"):
+        try:
+            return SmartConnect(**{key: timeout}, **kwargs)
+        except TypeError as te:
+            if key not in str(te) and "unexpected keyword" not in str(te).lower():
+                raise
+            continue
+    return SmartConnect(**kwargs)
 
 
 def connect(
