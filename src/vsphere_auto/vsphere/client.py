@@ -24,7 +24,7 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 
 log = logging.getLogger(__name__)
 
-_CONNECT_TIMEOUT = 15
+_CONNECT_TIMEOUT = 30
 
 
 def _create_ssl_context(insecure: bool = True) -> ssl.SSLContext | None:
