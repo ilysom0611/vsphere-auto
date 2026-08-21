@@ -2,7 +2,7 @@
 
 Automated, **Linux-first** batch VM deployment for **vSphere (vCenter / ESXi)**. Supports template clone and ISO-based provisioning, auto resource selection, concurrent multi-VM batches, idempotent/robust execution, **Web UI + CLI** sharing the same core, and Fernet-encrypted credential storage.
 
-> Runtime: Linux · Python 3.11+ · vCenter 7.0 / 8.0 or direct ESXi
+> Runtime: Linux · Python 3.11+ · vCenter 6.7 / 7.0 U3+ / 8.0+ or direct ESXi
 
 ---
 
@@ -29,7 +29,7 @@ Automated, **Linux-first** batch VM deployment for **vSphere (vCenter / ESXi)**.
 | Debian | 11 (bullseye) | ⚠️ Supported | Works; Python 3.11 via `bullseye-backports` or `uv`. |
 | CentOS | 7 | ⚠️ Legacy — EOL Jun 30 2024 | Still works via `install.sh` auto-provision (`uv` pulls Python 3.11 without root). **Migrate to Rocky/Alma 8/9 strongly recommended** — no security updates. |
 | CentOS Stream / Fedora | latest | ⚠️ Community | Should work; not formally tested in CI. |
-| macOS | 13+ | 🛠️ Dev only | For development / `plan --dry-run`; not for production service. |
+| macOS | 13+ | 🛠️ Dev only | For development / `plan` dry runs; not for production service. |
 
 **vSphere:** vCenter **6.7 / 7.0 U3+ / 8.0+** and ESXi 6.7/7.0/8.0. Direct ESXi connections work but some `CustomizationSpec` (guest customization) features require vCenter — the tool falls back automatically. On **6.7** the client relaxes TLS ciphers automatically (see Troubleshooting if discover still fails).
 
@@ -57,6 +57,7 @@ All Python dependencies are declared in `pyproject.toml` and installed automatic
 | Package | Version | Purpose |
 |---------|---------|---------|
 | `flask` | >=3.0 | Web UI and REST API |
+| `waitress` | >=3.0 | Production WSGI server (used by `serve` outside debug mode) |
 | `pyvmomi` | >=7.0 | vSphere SOAP API (clone, create VM, customization, discovery) |
 | `pyyaml` | >=6.0 | YAML config parsing |
 | `pydantic` | >=2.0 | Config validation |
@@ -341,7 +342,10 @@ Docker: **not yet provided** — there is no Dockerfile in the repository at the
 ## Security
 
 - **Default bind address is `0.0.0.0`** — the UI/API are reachable from other hosts out of the box. Set `--host 127.0.0.1`, `VSPHERE_HOST=127.0.0.1`, or edit the systemd unit to restrict to loopback.
-- **Set `VSPHERE_API_TOKEN` when the service is reachable from other hosts** — without it the API is unauthenticated (a loud warning is printed at startup in that case). When the token is set, requests must send it as `Authorization: Bearer <token>` (or `X-API-Token: <token>`).
+- **Set `VSPHERE_API_TOKEN` when the service is reachable from other hosts** — without it the API is unauthenticated (a loud warning is printed at startup in that case). When the token is set, requests must send it as `Authorization: Bearer <token>` (or `X-API-Token: <token>`). The Web UI handles this automatically: on the first `401` the browser prompts for the token, remembers it in `localStorage`, and retries — CLI/API callers pass the header explicitly:
+  ```bash
+  curl -H "X-API-Token: $VSPHERE_API_TOKEN" http://<host>:8080/api/health
+  ```
 - **Use a reverse proxy** (nginx/caddy with TLS + auth) in front of port 8080 for any non-loopback access, and restrict with firewalld:
   ```bash
   firewall-cmd --add-port=8080/tcp --permanent && firewall-cmd --reload
@@ -359,7 +363,7 @@ Docker: **not yet provided** — there is no Dockerfile in the repository at the
 | `VSPHERE_STATE_DIR` | Directory holding all runtime state (`creds.db`, `batch.db`, `ip_pools.json`, `inventory.json`, `.fernet.key`). `start.sh` defaults it to `<repo>/state` so manual starts and systemd share one state dir. | `<repo>/state` |
 | `VSPHERE_AUTO_KEY` | Fernet key used to encrypt stored credentials. Overrides `state/.fernet.key`; set it when using an external secret store or a shared state dir. | auto-generated key file |
 | `VSPHERE_API_TOKEN` | When set, all API requests must present this token (`Authorization: Bearer …` / `X-API-Token`). Required before exposing the UI beyond loopback. | unset (no auth) |
-| `VSPHERE_HOST` | Bind address used by `start.sh` and honoured by the `serve` CLI default. | `0.0.0.0` |
+| `VSPHERE_HOST` | Bind address for `start.sh`, passed through to `serve --host`. The `serve` CLI default itself is fixed at `0.0.0.0`; use `--host` to override per-invocation. | `0.0.0.0` |
 | `VSPHERE_PASSWORD` | vCenter password for CLI/Web flows that don't use saved credentials. | unset |
 | `VSPHERE_PASSWORD_FILE` | Alternative to `VSPHERE_PASSWORD`: read the password from this file. | unset |
 | `VSPHERE_DEBUG` | `1`/`true` enables Flask debug mode + DEBUG logging (same as `serve --debug`). Debug mode forces loopback binding. | unset |

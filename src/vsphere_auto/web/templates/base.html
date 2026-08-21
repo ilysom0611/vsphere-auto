@@ -5,6 +5,38 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{% block title %}vSphere Auto{% endblock %}</title>
 <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+<script>
+// API-token support: when the server runs with VSPHERE_API_TOKEN set, every
+// /api request must carry the token. Patch fetch ONCE here in <head>, before
+// any page script runs: attach X-API-Token from localStorage and, on the first
+// 401, ask for the token once and retry. No token configured server-side ->
+// responses are 200 and this is a no-op.
+(function () {
+  var KEY = "vsphereApiToken";
+  var orig = window.fetch.bind(window);
+  window.fetch = function (input, init) {
+    init = Object.assign({}, init || {});
+    var url = typeof input === "string" ? input : (input && input.url) || "";
+    if (url.indexOf("/api/") !== 0) return orig(input, init);
+    var headers = new Headers(init.headers || {});
+    var tok = localStorage.getItem(KEY);
+    if (tok && !headers.has("X-API-Token")) headers.set("X-API-Token", tok);
+    init.headers = headers;
+    return orig(input, init).then(function (r) {
+      if (r.status === 401 && !init.__tokenRetry) {
+        var t = window.prompt("API token required (server VSPHERE_API_TOKEN):");
+        if (t) {
+          localStorage.setItem(KEY, t);
+          init.__tokenRetry = true;
+          headers.set("X-API-Token", t);
+          return window.fetch(input, init);
+        }
+      }
+      return r;
+    });
+  };
+})();
+</script>
 </head>
 <body>
 <nav class="nav">
