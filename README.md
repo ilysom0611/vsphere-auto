@@ -35,6 +35,19 @@ Automated, **Linux-first** batch VM deployment for **vSphere (vCenter / ESXi)**.
 
 **Why not CentOS 7 for new installs?** CentOS 7 reached EOL and ships Python 3.6 + pip 8 which cannot build this project. `install.sh` works around it, but you inherit an unpatched base OS. For any new host, use **Ubuntu 22.04/24.04** or **Rocky/Alma 9**.
 
+### Guest customization prerequisites
+
+IP/hostname customization (static IP, hostname via `CustomizationSpec` / LinuxPrep) only works if the **template's guest OS can run it**:
+
+- **VMware Tools must be installed and running** inside the template (`open-vm-tools` on Linux). Without it, vCenter customization silently does nothing or fails mid-task.
+- **Cloud-init-enabled templates will override vCenter customization.** Most CentOS 7.9 cloud images ship cloud-init, which rewrites the network config at first boot and discards the static IP/hostname set by LinuxPrep. Either:
+  - disable cloud-init network configuration in the template:
+    ```bash
+    echo "network: {config: disabled}" > /etc/cloud/cloud.cfg.d/99-disable-network-config.cfg
+    ```
+  - or use a **non-cloud-init template** for static-IP deployments.
+- Templates cloned without any explicit IP (`ip: dhcp` / no ipPool) do not need customization and work with plain templates.
+
 ---
 
 ## Dependencies
@@ -221,14 +234,13 @@ vcenter:
   # host: 10.0.0.10
   # user: administrator@vsphere.local
   datacenter: DC1            # omit for auto when only one DC exists
-  # cluster: auto             # auto = scored by free CPU/memory
-  # datastore: auto
-  # network: auto
+  # cluster: auto             # auto = cluster with the most hosts
+  # datastore: auto           # auto = datastore with the most free space
+  # network: auto             # auto = first network found
 
 defaults:
   folder: workloads/demo
   guestId: ubuntu64Guest
-  firmware: bios
 
 batch:
   concurrency: 5             # parallel VM creations
@@ -241,6 +253,10 @@ ipPool:
   netmask: 255.255.255.0
   dns: [10.10.20.2, 8.8.8.8]
 
+# Count-based expansion (alternative to listing vms[]):
+# count: 3                   # generate 3 VMs named via batch.naming
+# template: tpl-ubuntu22-04
+
 vms:
   - name: demo-01
     template: tpl-ubuntu22-04  # or iso: "[datastore1] iso/ubuntu-22.04.iso"
@@ -252,8 +268,9 @@ vms:
         ip: auto              # auto (from pool) | dhcp | 10.10.20.11
 ```
 
-- Any resource field set to `auto` or omitted is auto-selected (clusters by free resources, datastores by free space, networks by reachability).
+- Any resource field set to `auto` or omitted is auto-selected: **cluster** = the one with the **most hosts**, **datastore** = the one with the **most free space**, **network** = the **first** one discovered. There is no free-CPU/memory scoring or reachability probing — pin explicit names when you need precise placement.
 - Each VM needs `template` **or** `iso`; disks can only be expanded, not shrunk.
+- IP pool allocation is all-or-nothing per plan/deploy: if the pool runs out mid-expansion, already-taken leases are rolled back and the run aborts with a clear error instead of deploying half the batch.
 - Never put passwords in YAML — use `VSPHERE_PASSWORD` / `VSPHERE_PASSWORD_FILE` or a saved credential.
 
 ---
@@ -282,7 +299,7 @@ vsphere-auto creds test <id|name>
 vsphere-auto discover --creds prod-vc [--out inventory.json]
 vsphere-auto plan --config my.yaml [--creds prod-vc]
 vsphere-auto deploy --config my.yaml [--creds prod-vc] [--yes]
-vsphere-auto serve --host 0.0.0.0 --port 8080
+vsphere-auto serve [--host 127.0.0.1] [--port 8080] [--debug]
 ```
 
 Exit codes: `0` all succeeded, `2` partial success, `1` failure — easy to check in scripts.
@@ -293,34 +310,60 @@ Exit codes: `0` all succeeded, `2` partial success, `1` failure — easy to chec
 
 ```bash
 sudo cp systemd/vsphere-auto.service /etc/systemd/system/
-sudoedit /etc/systemd/system/vsphere-auto.service  # adjust WorkingDirectory / ExecStart
+sudoedit /etc/systemd/system/vsphere-auto.service  # adjust User / WorkingDirectory / ExecStart paths
 sudo systemctl daemon-reload
 sudo systemctl enable --now vsphere-auto
 sudo systemctl status vsphere-auto
 journalctl -u vsphere-auto -f
 ```
 
-Docker (optional):
+Or let the installer do it (best-effort; substitutes paths automatically):
 
 ```bash
-docker build -t vsphere-auto -f Dockerfile ./
-docker run -p 8080:8080 -v ./state:/app/state -e VSPHERE_AUTO_KEY="$(cat state/.fernet.key)" vsphere-auto
+sudo bash install.sh --install-service
 ```
+
+The unit runs as `User=vsphereauto` (create it first or adjust `User=`/`Group=`), sets `VSPHERE_STATE_DIR=/opt/vsphere-auto/state`, restarts on failure after 5 seconds, and binds to `127.0.0.1` — override the host via `systemctl edit` only behind a reverse proxy.
+
+Docker: **not yet provided** — there is no Dockerfile in the repository at the moment. Run directly with `install.sh` + `start.sh` or the systemd unit above.
 
 ---
 
 ## Idempotency & Robustness
 
-- **Idempotency key** `specHash = sha256(normalizedSpec)` — re-running with the same spec skips unchanged VMs; use `--recreate` to force a rebuild.
-- **State** in `state/batch.db` (SQLite) — interrupted runs can resume; existing VMs are looked up by `vmName + folder` before cloning.
-- **Robustness:** `SmartConnect` + `tenacity` retries, vCenter task error classification, IP pool reserve/rollback, `SIGINT/SIGTERM` graceful stop, full redaction of secrets in logs and inventory.
+- **Idempotency key** `specHash = sha256(normalizedSpec)` — re-running with the same spec skips unchanged VMs (reported as `skipped` in the batch summary). Auto-assigned IPs are excluded from the hash so pool drift cannot break idempotency.
+- **State** in `state/batch.db` (SQLite, race-safe batch id allocation) — existing VMs are looked up by `vmName + folder` before cloning; stale `running`/`pending` rows left by a crash are marked `interrupted` on the next startup (`recover_interrupted`), so a re-run starts clean instead of colliding.
+- **IP pool safety:** auto-allocated leases are persisted to `state/ip_pools.json`; pool exhaustion aborts the plan with a clear error and already-taken leases are rolled back — no half-planned batches.
+- **Robustness:** vCenter connections use `tenacity` retry with backoff, vCenter task errors are classified with readable messages, `SIGINT/SIGTERM` stop batches gracefully, and secrets are redacted in logs, state and inventory.
 
 ---
 
 ## Security
 
-- Passwords are encrypted with Fernet and stored in `state/creds.db`. The key is resolved as `VSPHERE_AUTO_KEY` env var > `state/.fernet.key` (0600, auto-generated on first run).
-- The API returns `hasPassword` instead of the raw value; logs and inventory are redacted. Back up `state/.fernet.key` — losing it makes saved passwords unrecoverable.
+- **Default bind address is `127.0.0.1`.** The UI/API are loopback-only unless you explicitly set `--host 0.0.0.0`, `VSPHERE_HOST=0.0.0.0`, or edit the systemd unit.
+- **Set `VSPHERE_API_TOKEN` before exposing the service remotely** — without it the API is unauthenticated. When the token is set, requests must send it as `Authorization: Bearer <token>` (or `X-API-Token: <token>`).
+- **Use a reverse proxy** (nginx/caddy with TLS + auth) in front of port 8080 for any non-loopback access, and restrict with firewalld:
+  ```bash
+  firewall-cmd --add-port=8080/tcp --permanent && firewall-cmd --reload
+  ```
+- **TLS certificate verification is currently disabled** for vCenter connections — a compatibility measure for vSphere 6.7's self-signed certificates. Do not rely on the transport layer for confidentiality against active attackers on the vCenter path; keep the management network trusted.
+- Passwords are encrypted with Fernet and stored in `state/creds.db`. The key is resolved as `VSPHERE_AUTO_KEY` env var > `state/.fernet.key` (0600, auto-generated on first run). Back up `state/.fernet.key` — losing it makes saved passwords unrecoverable.
+- The API returns `hasPassword` instead of the raw value; logs, batch state and inventory are redacted (`***` for secret-looking keys).
+
+---
+
+## Environment Variables
+
+| Variable | Purpose | Default |
+|----------|---------|---------|
+| `VSPHERE_STATE_DIR` | Directory holding all runtime state (`creds.db`, `batch.db`, `ip_pools.json`, `inventory.json`, `.fernet.key`). `start.sh` defaults it to `<repo>/state` so manual starts and systemd share one state dir. | `<repo>/state` |
+| `VSPHERE_AUTO_KEY` | Fernet key used to encrypt stored credentials. Overrides `state/.fernet.key`; set it when using an external secret store or a shared state dir. | auto-generated key file |
+| `VSPHERE_API_TOKEN` | When set, all API requests must present this token (`Authorization: Bearer …` / `X-API-Token`). Required before exposing the UI beyond loopback. | unset (no auth) |
+| `VSPHERE_HOST` | Bind address used by `start.sh` and honoured by the `serve` CLI default. | `127.0.0.1` |
+| `VSPHERE_PASSWORD` | vCenter password for CLI/Web flows that don't use saved credentials. | unset |
+| `VSPHERE_PASSWORD_FILE` | Alternative to `VSPHERE_PASSWORD`: read the password from this file. | unset |
+| `VSPHERE_DEBUG` | `1`/`true` enables Flask debug mode + DEBUG logging (same as `serve --debug`). Debug mode forces loopback binding. | unset |
+| `LOG_LEVEL` | Log level override (`DEBUG`, `INFO`, …). | `INFO` (`DEBUG` with debug mode) |
 
 ---
 

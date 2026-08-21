@@ -13,34 +13,55 @@
 {% endblock %}
 {% block scripts %}
 <script>
+// All server-supplied values are rendered via textContent (never innerHTML
+// interpolation) so batch ids / VM names cannot inject markup.
+function td(text){
+  const c=document.createElement('td');
+  c.textContent=(text===undefined||text===null)?'':String(text);
+  return c;
+}
 async function loadBatches(){
   const r=await fetch('/api/batches'); const list=await r.json();
   const tb=document.querySelector('#batchTable tbody'); tb.innerHTML='';
   list.forEach(b=>{
     const tr=document.createElement('tr');
-    tr.innerHTML=`<td>${b.id}</td><td>${b.status}</td><td>${b.created_at||''}</td><td><button onclick="loadTasks('${b.id}')">View</button></td>`;
+    tr.appendChild(td(b.id));
+    tr.appendChild(td(b.status));
+    tr.appendChild(td(b.created_at||''));
+    const actions=document.createElement('td');
+    const btn=document.createElement('button');
+    btn.textContent='View';
+    btn.dataset.id=b.id;
+    actions.appendChild(btn);
+    tr.appendChild(actions);
+    tb.appendChild(tr);
+  });
+}
+document.querySelector('#batchTable tbody').addEventListener('click', (ev)=>{
+  const btn=ev.target.closest('button[data-id]');
+  if(!btn) return;
+  loadTasks(btn.dataset.id);
+});
+function fillTaskRows(list){
+  const tb=document.querySelector('#taskTable tbody'); tb.innerHTML='';
+  list.forEach(t=>{
+    const tr=document.createElement('tr');
+    tr.appendChild(td(t.id));
+    tr.appendChild(td(t.vm_name));
+    tr.appendChild(td(t.status));
+    tr.appendChild(td(t.updated_at||''));
     tb.appendChild(tr);
   });
 }
 async function loadTasks(batchId){
   const r=await fetch('/api/tasks?batch_id='+encodeURIComponent(batchId));
   const list=await r.json();
-  const tb=document.querySelector('#taskTable tbody'); tb.innerHTML='';
-  list.forEach(t=>{
-    const tr=document.createElement('tr');
-    tr.innerHTML=`<td>${t.id}</td><td>${t.vm_name}</td><td>${t.status}</td><td>${t.updated_at||''}</td>`;
-    tb.appendChild(tr);
-  });
+  fillTaskRows(list);
   document.getElementById('status').textContent='Batch '+batchId+' — '+list.length+' item(s)';
 }
 async function loadAllTasks(){
   const r=await fetch('/api/tasks'); const list=await r.json();
-  const tb=document.querySelector('#taskTable tbody'); tb.innerHTML='';
-  list.forEach(t=>{
-    const tr=document.createElement('tr');
-    tr.innerHTML=`<td>${t.id}</td><td>${t.vm_name}</td><td>${t.status}</td><td>${t.updated_at||''}</td>`;
-    tb.appendChild(tr);
-  });
+  fillTaskRows(list);
 }
 document.getElementById('btnRefresh').onclick=()=>{ loadBatches(); loadAllTasks(); };
 loadBatches(); loadAllTasks();

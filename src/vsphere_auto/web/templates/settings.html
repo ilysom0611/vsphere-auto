@@ -28,25 +28,63 @@
 {% endblock %}
 {% block scripts %}
 <script>
+// All server-supplied values are rendered via textContent (never innerHTML
+// interpolation) so credential names/hosts/usernames cannot inject markup.
 let editingId=null;
+function td(text){
+  const c=document.createElement('td');
+  c.textContent=(text===undefined||text===null)?'':String(text);
+  return c;
+}
+function actionBtn(label, credId, handler){
+  const b=document.createElement('button');
+  b.textContent=label;
+  b.dataset.id=credId;
+  b.dataset.action=handler;
+  return b;
+}
 async function load(){
   const r=await fetch('/api/creds'); const list=await r.json();
   const tb=document.querySelector('#credsTable tbody'); tb.innerHTML='';
   list.forEach(c=>{
     const tr=document.createElement('tr');
-    tr.innerHTML=`<td>${c.id}</td><td>${c.name}</td><td>${c.host}:${c.port}</td><td>${c.username}</td><td>${c.type}</td><td>${c.updated_at||''}</td>
-    <td><button onclick="testCred(${c.id})">Test</button> <button onclick="editCred(${c.id},'${c.name}','${c.host}',${c.port},'${c.username}','${c.type}')">Edit</button> <button onclick="delCred(${c.id})">Delete</button></td>`;
+    tr.appendChild(td(c.id));
+    tr.appendChild(td(c.name));
+    tr.appendChild(td(c.host+':'+c.port));
+    tr.appendChild(td(c.username));
+    tr.appendChild(td(c.type));
+    tr.appendChild(td(c.updated_at||''));
+    const actions=document.createElement('td');
+    actions.appendChild(actionBtn('Test', c.id, 'test'));
+    actions.appendChild(document.createTextNode(' '));
+    actions.appendChild(actionBtn('Edit', c.id, 'edit'));
+    actions.appendChild(document.createTextNode(' '));
+    actions.appendChild(actionBtn('Delete', c.id, 'delete'));
+    tr.appendChild(actions);
     tb.appendChild(tr);
   });
 }
-function editCred(id,name,host,port,user,type){
+tbHandler();
+function tbHandler(){
+  document.querySelector('#credsTable tbody').addEventListener('click', async (ev)=>{
+    const btn=ev.target.closest('button[data-action]');
+    if(!btn) return;
+    const id=parseInt(btn.dataset.id,10);
+    if(btn.dataset.action==='test') await testCred(id);
+    else if(btn.dataset.action==='edit') await editCred(id);
+    else if(btn.dataset.action==='delete') await delCred(id);
+  });
+}
+async function editCred(id){
+  const r=await fetch('/api/creds/'+encodeURIComponent(id)); const c=await r.json();
+  if(!r.ok||c.error){ alert('Failed to load credential #'+id); return; }
   editingId=id;
   document.getElementById('formTitle').textContent='Edit Credential #'+id;
-  document.getElementById('fName').value=name;
-  document.getElementById('fHost').value=host;
-  document.getElementById('fPort').value=port;
-  document.getElementById('fUser').value=user;
-  document.getElementById('fType').value=type;
+  document.getElementById('fName').value=c.name;
+  document.getElementById('fHost').value=c.host;
+  document.getElementById('fPort').value=c.port;
+  document.getElementById('fUser').value=c.username;
+  document.getElementById('fType').value=c.type;
   document.getElementById('fPass').value='';
   document.getElementById('btnCancel').style.display='';
 }

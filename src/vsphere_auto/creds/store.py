@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from ..utils.paths import get_state_dir
 from .crypto import encrypt_password, decrypt_password
 
 DEFAULT_DB = Path("state/creds.db")
@@ -46,15 +47,9 @@ class Creds:
 
 
 def _db_path(state_dir: Path | None = None) -> Path:
-    env = os.environ.get(STATE_ENV)
-    if env:
-        return Path(env) / "creds.db"
     if state_dir:
         return Path(state_dir) / "creds.db"
-    # prefer vsphere-auto/state when running from repo root
-    if Path("vsphere-auto/state").exists():
-        return Path("vsphere-auto/state/creds.db")
-    return DEFAULT_DB
+    return get_state_dir() / "creds.db"
 
 
 def _connect(db: Path) -> sqlite3.Connection:
@@ -96,6 +91,14 @@ def init_db(state_dir: Path | None = None) -> Path:
             os.chmod(db, 0o600)
         except Exception:
             pass
+        # WAL/SHM sidecars carry the same data — protect them too
+        for suffix in ("-wal", "-shm"):
+            try:
+                sidecar = Path(str(db) + suffix)
+                if sidecar.exists():
+                    os.chmod(sidecar, 0o600)
+            except Exception:
+                pass
     finally:
         conn.close()
     return db
@@ -218,27 +221,34 @@ def update_creds(
         row = conn.execute("SELECT * FROM endpoints WHERE id=?", (creds_id,)).fetchone()
         if not row:
             return None
-        # Build single UPDATE to avoid lost-update race
         enc: str | None = None
         if password is not None:
             enc = encrypt_password(password, state_dir) if password else ""
-        # Use COALESCE pattern via Python-level merge but single statement
-        cur = dict(row)
-        new_name = name.strip() if name is not None else cur["name"]
-        new_host = host.strip() if host is not None else cur["host"]
-        new_port = int(port) if port is not None else cur["port"]
-        new_user = username.strip() if username is not None else cur["username"]
-        new_enc = enc if enc is not None else cur["password_enc"]
-        new_type = cred_type if cred_type is not None else cur["type"]
+        # Single atomic UPDATE with COALESCE: concurrent updates to different
+        # fields can no longer overwrite each other (no read-merge-write gap).
+        new_name = name.strip() if name is not None else None
+        new_host = host.strip() if host is not None else None
+        new_port = int(port) if port is not None else None
+        new_user = username.strip() if username is not None else None
         new_updated = _now()
         try:
             conn.execute(
-                "UPDATE endpoints SET name=?, host=?, port=?, username=?, password_enc=?, type=?, updated_at=? WHERE id=?",
-                (new_name, new_host, new_port, new_user, new_enc, new_type, new_updated, creds_id),
+                """
+                UPDATE endpoints SET
+                    name=COALESCE(?, name),
+                    host=COALESCE(?, host),
+                    port=COALESCE(?, port),
+                    username=COALESCE(?, username),
+                    password_enc=COALESCE(?, password_enc),
+                    type=COALESCE(?, type),
+                    updated_at=?
+                WHERE id=?
+                """,
+                (new_name, new_host, new_port, new_user, enc, cred_type, new_updated, creds_id),
             )
         except sqlite3.IntegrityError as e:
             if "UNIQUE" in str(e) or "unique" in str(e).lower():
-                raise ValueError(f"Name already exists: {new_name}") from e
+                raise ValueError(f"Name already exists: {new_name or row['name']}") from e
             raise
         conn.commit()
         return get_creds(creds_id, state_dir)

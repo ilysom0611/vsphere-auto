@@ -39,7 +39,7 @@ def select_datastore(inventory: dict[str, Any], preferred: str | None = None, re
                 if required_gb and _free(d) < required_gb * 1024**3:
                     raise ValueError(f"Datastore {pref!r} has insufficient free space for {required_gb}GB")
                 return d
-        return None
+        raise ValueError(f"Preferred datastore {pref!r} not found in inventory")
     # filter by space if required
     if required_gb:
         need = required_gb * 1024**3
@@ -60,8 +60,11 @@ def select_network(inventory: dict[str, Any], preferred: str | None = None) -> d
         for n in nets:
             if n.get("name", "").strip() == pref:
                 return n
-        return None
-    return nets[0] if nets else None
+        raise ValueError(f"Preferred network {pref!r} not found in inventory")
+    chosen = nets[0] if nets else None
+    if chosen is not None:
+        log.info("select_network: auto-selected network %r", chosen.get("name", ""))
+    return chosen
 
 
 def select_folder(inventory: dict[str, Any], preferred: str | None = None) -> dict[str, Any] | None:
@@ -90,22 +93,34 @@ def auto_select_all(inventory: dict[str, Any], cfg: dict[str, Any] | None = None
     """Return auto-selected resources dict for plan preview."""
     cfg = cfg or {}
     vc = cfg.get("vcenter", {})
-    # required_gb for datastore: take max diskGB across vms
+    # required_gb for datastore: sum diskGB across ALL VMs in the batch
     required_gb = None
     try:
         vms = cfg.get("vms") or []
         if vms:
-            required_gb = max(int(vm.get("diskGB") or 0) for vm in vms) or None
+            total = sum(int(vm.get("diskGB") or 0) for vm in vms)
+            required_gb = total or None
     except Exception:
         pass
+    datastore_error: str | None = None
     try:
         ds = select_datastore(inventory, vc.get("datastore"), required_gb=required_gb)
     except ValueError as e:
         log.warning("auto_select_all datastore: %s", e)
         ds = None
+        datastore_error = str(e)
+    network_error: str | None = None
+    try:
+        net = select_network(inventory, vc.get("network"))
+    except ValueError as e:
+        log.warning("auto_select_all network: %s", e)
+        net = None
+        network_error = str(e)
     return {
         "cluster": select_cluster(inventory, vc.get("cluster")),
         "datastore": ds,
-        "network": select_network(inventory, vc.get("network")),
+        "network": net,
         "folder": select_folder(inventory, (cfg.get("defaults") or {}).get("folder")),
+        **({"datastoreError": datastore_error} if datastore_error else {}),
+        **({"networkError": network_error} if network_error else {}),
     }

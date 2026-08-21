@@ -1,13 +1,29 @@
 [Unit]
 Description=vSphere Auto Deploy
-After=network.target
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
+# Create the dedicated user first (or change to an existing user):
+#   sudo useradd -r -s /sbin/nologin -d /opt/vsphere-auto vsphereauto
+#   sudo chown -R vsphereauto:vsphereauto /opt/vsphere-auto
+User=vsphereauto
+Group=vsphereauto
 WorkingDirectory=/opt/vsphere-auto
-ExecStart=/opt/vsphere-auto/.venv/bin/vsphere-auto serve --host 0.0.0.0 --port 8080
+Environment=VSPHERE_STATE_DIR=/opt/vsphere-auto/state
+ExecStart=/opt/vsphere-auto/.venv/bin/vsphere-auto serve --host 127.0.0.1 --port 8080
 Restart=on-failure
-# VSPHERE_AUTO_KEY is loaded from state/.fernet.key; set only if you use an external vault
+RestartSec=5
+# --- Hardening ---
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/opt/vsphere-auto/state -/opt/vsphere-auto
+PrivateTmp=yes
+ProtectHome=yes
+# VSPHERE_AUTO_KEY is loaded from state/.fernet.key; set only if you use an external vault.
+# To expose the UI beyond loopback, override the host (use a reverse proxy in front!):
+#   sudo systemctl edit vsphere-auto
 # Environment=VSPHERE_AUTO_KEY=
 # EnvironmentFile=/etc/vsphere-auto/env
 

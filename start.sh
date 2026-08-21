@@ -12,6 +12,10 @@ else
 fi
 cd "$SCRIPT_DIR"
 
+# Share one state dir between manual starts and systemd unless overridden.
+export VSPHERE_STATE_DIR="${VSPHERE_STATE_DIR:-${SCRIPT_DIR}/state}"
+mkdir -p "$VSPHERE_STATE_DIR" 2>/dev/null || true
+
 # Usage: bash start.sh [port] [--debug]
 #   VSPHERE_DEBUG=1 bash start.sh   # env-var alias
 #   LOG_LEVEL=DEBUG bash start.sh   # log level override
@@ -33,10 +37,9 @@ for arg in "$@"; do
   esac
 done
 
-# Support VSPHERE_STATE_DIR for unified state path (also used by crypto/store/state/ippool)
-if [ -n "${VSPHERE_STATE_DIR:-}" ]; then
-  mkdir -p "$VSPHERE_STATE_DIR" 2>/dev/null || true
-fi
+# Support VSPHERE_HOST for the bind address (default loopback — safe by default;
+# set VSPHERE_HOST=0.0.0.0 explicitly to expose the UI, ideally behind a proxy).
+HOST="${VSPHERE_HOST:-127.0.0.1}"
 
 # Resolve the interpreter (same order as before)
 PYBIN_RESOLVED=""
@@ -53,7 +56,7 @@ fi
 if [ -z "$PYBIN_RESOLVED" ]; then
   for cand in python3.11 python3 python; do
     if command -v "$cand" >/dev/null 2>&1 \
-      && "$cand" -c 'import sys; exit(0 if sys.version_info >= (3,9) else 1)' 2>/dev/null \
+      && "$cand" -c 'import sys; exit(0 if sys.version_info >= (3,11) else 1)' 2>/dev/null \
       && "$cand" -c 'import vsphere_auto' 2>/dev/null; then
       PYBIN_RESOLVED="$cand"; break
     fi
@@ -72,4 +75,4 @@ if [ -z "$PYBIN_RESOLVED" ]; then
   exit 1
 fi
 
-exec "$PYBIN_RESOLVED" -m vsphere_auto serve --host 0.0.0.0 --port "$PORT" "${DEBUG_ARGS[@]}"
+exec "$PYBIN_RESOLVED" -m vsphere_auto serve --host "$HOST" --port "$PORT" "${DEBUG_ARGS[@]}"

@@ -2,30 +2,38 @@
 from __future__ import annotations
 
 import json
-import os
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-DEFAULT_DB = Path("state/batch.db")
+from ..utils.paths import get_state_dir
+
+VALID_BATCH_STATUSES = {"pending", "running", "success", "partial", "failed", "interrupted"}
+
+# Keys whose values must never reach config_json in plaintext.
+_SENSITIVE_KEY_PARTS = ("password", "secret", "token", "credential")
 
 
-def _resolve_state_dir(state_dir: Path | None) -> Path | None:
-    # Explicit env override takes precedence for path unification
-    env = os.environ.get("VSPHERE_STATE_DIR")
-    if env:
-        return Path(env)
-    return state_dir
+def _redact_config(obj: Any) -> Any:
+    """Deep-copy with sensitive-key values replaced by '***'."""
+    if isinstance(obj, dict):
+        out: dict[str, Any] = {}
+        for k, v in obj.items():
+            if any(part in k.lower() for part in _SENSITIVE_KEY_PARTS):
+                out[k] = "***"
+            else:
+                out[k] = _redact_config(v)
+        return out
+    if isinstance(obj, list):
+        return [_redact_config(x) for x in obj]
+    return obj
 
 
 def _db_path(state_dir: Path | None = None) -> Path:
-    sd = _resolve_state_dir(state_dir)
-    if sd:
-        return Path(sd) / "batch.db"
-    if Path("vsphere-auto/state").exists():
-        return Path("vsphere-auto/state/batch.db")
-    return DEFAULT_DB
+    if state_dir:
+        return Path(state_dir) / "batch.db"
+    return get_state_dir() / "batch.db"
 
 
 def _connect(db: Path) -> sqlite3.Connection:
@@ -46,6 +54,19 @@ def _connect(db: Path) -> sqlite3.Connection:
     except Exception:
         pass
     return conn
+
+
+def _chmod_sidecars(db: Path) -> None:
+    """WAL/SHM sidecars contain the same data as the DB — protect them too."""
+    for suffix in ("-wal", "-shm"):
+        try:
+            sidecar = Path(str(db) + suffix)
+            if sidecar.exists():
+                import os
+
+                os.chmod(sidecar, 0o600)
+        except Exception:
+            pass
 
 
 def init_db(state_dir: Path | None = None) -> Path:
@@ -83,11 +104,18 @@ def init_db(state_dir: Path | None = None) -> Path:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_batch_id ON tasks(batch_id)")
         except Exception:
             pass
+        try:
+            conn.execute("PRAGMA user_version = 1;")
+        except Exception:
+            pass
         conn.commit()
         try:
+            import os
+
             os.chmod(db, 0o600)
         except Exception:
             pass
+        _chmod_sidecars(db)
     finally:
         conn.close()
     return db
@@ -98,27 +126,88 @@ def _now() -> str:
 
 
 def create_batch(batch_id: str, config: dict[str, Any], state_dir: Path | None = None) -> None:
+    """Insert a batch row. Config is redacted before persisting (no plaintext secrets).
+
+    Raises ValueError if batch_id already exists — callers should allocate ids via
+    :func:`create_batch_auto` to avoid races between concurrent deployments.
+    """
     init_db(state_dir)
     conn = _connect(_db_path(state_dir))
     try:
-        # Preserve created_at on replace
-        row = conn.execute("SELECT created_at FROM batches WHERE id=?", (batch_id,)).fetchone()
-        created = row["created_at"] if row and row["created_at"] else _now()
-        conn.execute(
-            "INSERT OR REPLACE INTO batches (id, config_json, status, created_at, updated_at) VALUES (?,?,?,?,?)",
-            (batch_id, json.dumps(config, ensure_ascii=False), "pending", created, _now()),
-        )
+        try:
+            conn.execute(
+                "INSERT INTO batches (id, config_json, status, created_at, updated_at) VALUES (?,?,?,?,?)",
+                (batch_id, json.dumps(_redact_config(config), ensure_ascii=False), "pending", _now(), _now()),
+            )
+        except sqlite3.IntegrityError as e:
+            raise ValueError(f"batch id already exists: {batch_id}") from e
         conn.commit()
     finally:
         conn.close()
 
 
+def create_batch_auto(config: dict[str, Any], state_dir: Path | None = None) -> str:
+    """Atomically allocate the next batch id and insert the row.
+
+    Uses BEGIN IMMEDIATE so two concurrent deployments can never compute the
+    same ``batch-NNNN`` id and overwrite each other's rows.
+    """
+    init_db(state_dir)
+    db = _db_path(state_dir)
+    last_err: Exception | None = None
+    for _ in range(5):
+        conn = _connect(db)
+        try:
+            conn.isolation_level = None  # manual transaction control
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT COALESCE(MAX(CAST(substr(id, 7) AS INTEGER)), 0) FROM batches"
+            ).fetchone()
+            candidate = f"batch-{int(row[0] or 0) + 1:04d}"
+            conn.execute(
+                "INSERT INTO batches (id, config_json, status, created_at, updated_at) VALUES (?,?,?,?,?)",
+                (candidate, json.dumps(_redact_config(config), ensure_ascii=False), "pending", _now(), _now()),
+            )
+            conn.execute("COMMIT")
+            return candidate
+        except sqlite3.IntegrityError as e:
+            last_err = e
+            try:
+                conn.execute("ROLLBACK")
+            except Exception:
+                pass
+        finally:
+            conn.close()
+    raise RuntimeError(f"could not allocate a unique batch id after retries: {last_err}")
+
+
 def update_batch_status(batch_id: str, status: str, state_dir: Path | None = None) -> None:
+    if status not in VALID_BATCH_STATUSES:
+        raise ValueError(f"invalid batch status {status!r}; expected one of {sorted(VALID_BATCH_STATUSES)}")
     init_db(state_dir)
     conn = _connect(_db_path(state_dir))
     try:
         conn.execute("UPDATE batches SET status=?, updated_at=? WHERE id=?", (status, _now(), batch_id))
         conn.commit()
+    finally:
+        conn.close()
+
+
+def recover_interrupted(state_dir: Path | None = None) -> tuple[int, int]:
+    """Mark stale running/pending rows as interrupted after a crash/restart.
+
+    Returns (tasks_marked, batches_marked). Call at service startup.
+    """
+    init_db(state_dir)
+    conn = _connect(_db_path(state_dir))
+    try:
+        cur_t = conn.execute("UPDATE tasks SET status='interrupted', updated_at=? WHERE status='running'", (_now(),))
+        cur_b = conn.execute(
+            "UPDATE batches SET status='interrupted', updated_at=? WHERE status IN ('pending','running')",
+            (_now(),),
+        )
+        conn.commit()
+        return cur_t.rowcount, cur_b.rowcount
     finally:
         conn.close()
 
@@ -172,12 +261,12 @@ def get_task(task_id: str, state_dir: Path | None = None) -> dict[str, Any] | No
 
 
 def next_batch_id(state_dir: Path | None = None) -> str:
+    """Preview-only helper; NOT race-safe. Prefer :func:`create_batch_auto`."""
     init_db(state_dir)
     conn = _connect(_db_path(state_dir))
     try:
         row = conn.execute("SELECT COALESCE(MAX(CAST(substr(id, 7) AS INTEGER)), 0) FROM batches").fetchone()
         n = int(row[0] or 0) + 1 if row else 1
-        # Ensure no collision with existing id (in case of manual inserts)
         while True:
             candidate = f"batch-{n:04d}"
             exists = conn.execute("SELECT 1 FROM batches WHERE id=?", (candidate,)).fetchone()

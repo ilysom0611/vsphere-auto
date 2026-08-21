@@ -16,22 +16,29 @@ vcenter:
 
 defaults:
   folder: workloads/demo
-  resourcePool: auto
   guestId: ubuntu64Guest
-  firmware: bios          # bios | efi
-  hardwareVersion: auto
+  # template: tpl-ubuntu22-04   # used when generating VMs from top-level `count`
+
+# Reserved for future use — currently NOT consumed by any code path:
+#   defaults.firmware, defaults.hardwareVersion, defaults.resourcePool,
+#   ipPool.poolsFile, vms[].extraConfig
+# They are still accepted by the config model but silently ignored.
 
 batch:
   concurrency: 5
   onError: continue       # continue | fail-fast
   naming: "demo-{index:02d}"
 
+# Count-based expansion: instead of listing vms[], set count + template and
+# `count` VMs are generated named via batch.naming (must contain {index}):
+# count: 3
+# template: tpl-ubuntu22-04
+
 ipPool:
   cidr: 10.10.20.0/24
   gateway: 10.10.20.1
   netmask: 255.255.255.0
   dns: [10.10.20.2, 8.8.8.8]
-  # poolsFile: ./state/ip_pools.json
 
 vms:
   - name: demo-01

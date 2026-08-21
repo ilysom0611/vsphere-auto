@@ -195,7 +195,7 @@ def plan(config: str = typer.Option(..., "--config", "-c", help="Config YAML pat
 def deploy(config: str = typer.Option(..., "--config", "-c", help="Config YAML path"), creds: Optional[str] = typer.Option(None), yes: bool = typer.Option(False, help="Skip confirmation")):
     from .config import load_config, resolve_vcenter_creds
     from .batch.planner import expand_batch
-    from .batch.state import create_batch, next_batch_id
+    from .batch.state import create_batch_auto
     from .batch.executor import run_batch
     from .vsphere.client import connect, disconnect
 
@@ -222,8 +222,11 @@ def deploy(config: str = typer.Option(..., "--config", "-c", help="Config YAML p
         console.print(f"Deploy {len(vms)} VM(s) to {host}? Use --yes to skip prompt.")
         if not typer.confirm("Continue?"):
             raise typer.Exit(0)
-    batch_id = next_batch_id()
-    create_batch(batch_id, cfg_dict)
+    try:
+        batch_id = create_batch_auto(cfg_dict)
+    except (ValueError, RuntimeError) as e:
+        console.print(f"[red]Failed to create batch: {e}[/red]")
+        raise typer.Exit(1)
     console.print(f"[green]Batch {batch_id} started: {len(vms)} VM(s)[/green]")
 
     # Build deploy_fn similar to web deploy
@@ -243,6 +246,10 @@ def deploy(config: str = typer.Option(..., "--config", "-c", help="Config YAML p
         guest_id = vm.get("guestId") or defaults.get("guestId") or "ubuntu64Guest"
         nets = vm.get("networks") or []
         ip = nets[0].get("ip") if nets else None
+        # networks[0].network is forwarded to both clone and ISO paths; "auto"
+        # means let the selector pick.
+        raw_network = nets[0].get("network") if nets else None
+        network_name = raw_network if raw_network not in ("auto", None, "") else None
         netmask = ippool.get("netmask")
         gateway = ippool.get("gateway")
         # multi-NIC support
@@ -276,7 +283,21 @@ def deploy(config: str = typer.Option(..., "--config", "-c", help="Config YAML p
             if find_vm(content, name, folder) is not None:
                 return {"ok": True, "skipped": True}
             if template:
-                task = clone_from_template(si, template, name, vc.get("datacenter"), vc.get("cluster") if vc.get("cluster") != "auto" else None, vc.get("datastore") if vc.get("datastore") != "auto" else None, folder, cpu=cpu, memory_mb=mem, disk_gb=int(vm.get("diskGB")) if vm.get("diskGB") is not None else None, customization_spec=custom)
+                clone_kwargs = {}
+                # Defensive: clone_from_template may gain a network parameter
+                # (concurrent work on vsphere/deploy.py) — pass it only if the
+                # signature supports it.
+                import inspect as _inspect
+
+                try:
+                    _params = _inspect.signature(clone_from_template).parameters
+                    if "network_name" in _params:
+                        clone_kwargs["network_name"] = network_name
+                    elif "network" in _params:
+                        clone_kwargs["network"] = network_name
+                except (TypeError, ValueError):
+                    pass
+                task = clone_from_template(si, template, name, vc.get("datacenter"), vc.get("cluster") if vc.get("cluster") != "auto" else None, vc.get("datastore") if vc.get("datastore") != "auto" else None, folder, cpu=cpu, memory_mb=mem, disk_gb=int(vm.get("diskGB")) if vm.get("diskGB") is not None else None, customization_spec=custom, **clone_kwargs)
                 res = wait_for_task(task, timeout=1800)
                 return {"ok": res["state"] == "success", "error": res.get("error")}
             elif iso:
@@ -288,7 +309,7 @@ def deploy(config: str = typer.Option(..., "--config", "-c", help="Config YAML p
                         pass
                 if not ds_name:
                     return {"ok": False, "error": "Datastore required for ISO"}
-                vm_obj = create_vm_from_iso(si, name, ds_name, iso, guest_id, cpu, mem, int(vm.get("diskGB") or 40), None, folder, vc.get("datacenter"))
+                vm_obj = create_vm_from_iso(si, name, ds_name, iso, guest_id, cpu, mem, int(vm.get("diskGB") or 40), network_name, folder, vc.get("datacenter"))
                 if not vm_obj:
                     return {"ok": False, "error": "CreateVM returned no VM object"}
                 return {"ok": True, "moid": getattr(vm_obj, "_moId", "") if vm_obj else ""}
@@ -303,14 +324,22 @@ def deploy(config: str = typer.Option(..., "--config", "-c", help="Config YAML p
         concurrency = 5
     on_error = (cfg_dict.get("batch") or {}).get("onError") or "continue"
     result = run_batch(batch_id, vms, deploy_one, concurrency=concurrency, on_error=on_error)
-    console.print(result)
-    if result["failed"]:
+    console.print(f"[bold]Batch {result.get('batch_id', batch_id)} finished: {result.get('status')}[/bold]")
+    console.print(
+        f"total={result.get('total', len(vms))} "
+        f"succeeded={result.get('succeeded', 0)} (skipped={result.get('skipped', 0)}) "
+        f"cancelled={result.get('cancelled', 0)} failed={result.get('failed', 0)}"
+    )
+    for vm_name, res in (result.get("results") or {}).items():
+        if not res.get("ok"):
+            console.print(f"[red]  {vm_name}: {res.get('error') or 'failed'}[/red]")
+    if result.get("failed"):
         raise typer.Exit(2)
 
 
 @app.command()
 def serve(
-    host: str = typer.Option("0.0.0.0"),
+    host: str = typer.Option("127.0.0.1"),
     port: int = typer.Option(8080),
     debug: bool = typer.Option(False, "--debug", help="Enable Flask debug + DEBUG log level (or set VSPHERE_DEBUG=1)"),
 ):
@@ -323,6 +352,16 @@ def serve(
     if os.environ.get("VSPHERE_DEBUG", "").strip().lower() in ("1", "true", "yes", "on"):
         debug = True
 
+    # Debug mode exposes the unauthenticated Werkzeug interactive debugger —
+    # never allow it on a non-loopback interface.
+    if debug and host not in ("127.0.0.1", "::1", "localhost"):
+        console.print(
+            f"[red]WARNING: --debug with non-loopback host {host!r} would expose an "
+            f"UNAUTHENTICATED interactive debugger — forcing host back to 127.0.0.1.[/red]"
+        )
+        log.warning("--debug requested with non-loopback host %r; forcing 127.0.0.1 for safety", host)
+        host = "127.0.0.1"
+
     # Logging: DEBUG in debug mode unless LOG_LEVEL is explicitly set.
     level = os.environ.get("LOG_LEVEL") or ("DEBUG" if debug else "INFO")
     setup_logging(level)
@@ -334,7 +373,19 @@ def serve(
     console.print(f"[green]Serving on http://{host}:{port}  ({mode})[/green]")
     if debug:
         console.print("[yellow]Debug mode ON — verbose logs + auto-reload; do not use in production.[/yellow]")
-    app_flask.run(host=host, port=port, debug=debug, use_reloader=debug)
+    # Production: prefer waitress (real WSGI server) over the Flask dev server.
+    try:
+        from waitress import serve as waitress_serve
+    except ImportError:
+        waitress_serve = None
+    if waitress_serve is not None and not debug:
+        log.info("serving with waitress WSGI server on %s:%s", host, port)
+        console.print("[dim]WSGI server: waitress[/dim]")
+        waitress_serve(app_flask, host=host, port=port)
+    else:
+        if waitress_serve is None and not debug:
+            console.print("[dim]WSGI server: flask dev server (install 'waitress' for production)[/dim]")
+        app_flask.run(host=host, port=port, debug=debug, use_reloader=debug)
 
 
 if __name__ == "__main__":

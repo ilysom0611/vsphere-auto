@@ -1,7 +1,72 @@
 """Guest customization spec builders (LinuxPrep / Sysprep)."""
 from __future__ import annotations
 
+import ipaddress
+import logging
 from typing import Any
+
+log = logging.getLogger(__name__)
+
+
+def validate_hostname(hostname: str) -> str:
+    """Validate RFC1123 single-label hostname. Raises ValueError otherwise."""
+    h = (hostname or "").strip()
+    if not h:
+        raise ValueError("hostname is empty")
+    if "." in h:
+        raise ValueError(
+            f"hostname {hostname!r} must be a single label without dots "
+            "(FQDN domains go in the 'domain' field)"
+        )
+    if len(h) > 63:
+        raise ValueError(f"hostname {hostname!r} exceeds 63 characters (RFC 1123)")
+    if not all(c.isalnum() or c == "-" for c in h):
+        raise ValueError(f"hostname {hostname!r} may only contain letters, digits and hyphens (RFC 1123)")
+    if h.startswith("-") or h.endswith("-"):
+        raise ValueError(f"hostname {hostname!r} must not start or end with a hyphen (RFC 1123)")
+    return h
+
+
+def _validate_static_ip(ip: str | None, netmask: str | None, context: str) -> None:
+    """Validate a static IP binding: netmask required and both parseable."""
+    if netmask is None or not str(netmask).strip():
+        raise ValueError(f"{context}: subnet_mask/netmask is required when a static IP ({ip}) is used")
+    try:
+        ipaddress.ip_address(str(ip).strip())
+    except ValueError as e:
+        raise ValueError(f"{context}: invalid IP address {ip!r}: {e}") from e
+    try:
+        ipaddress.ip_address(str(netmask).strip())
+    except ValueError as e:
+        raise ValueError(f"{context}: invalid subnet mask {netmask!r}: {e}") from e
+
+
+def _build_nic_adapters(vim, nic_defs: list[dict[str, str | None]], dns: list[str] | None, hostname: str):
+    """Shared NIC AdapterMapping builder with static-IP validation."""
+    adapters: list[Any] = []
+    for idx, nic in enumerate(nic_defs):
+        _ip = nic.get("ip")
+        _netmask = nic.get("netmask")
+        _gateway = nic.get("gateway")
+        adapter = vim.vm.customization.AdapterMapping()
+        ip_settings = vim.vm.customization.IPSettings()
+        # ip == None/""/"dhcp"/"auto" -> DHCP
+        if _ip is not None and str(_ip).strip().lower() not in ("", "dhcp", "auto"):
+            _validate_static_ip(str(_ip), _netmask, f"{hostname} NIC{idx}")
+            fixed = vim.vm.customization.FixedIp(ipAddress=str(_ip).strip())
+            ip_settings.ip = fixed
+            ip_settings.subnetMask = str(_netmask).strip()
+            if _gateway:
+                ip_settings.gateway = [_gateway]
+            if dns:
+                ip_settings.dnsServerList = dns
+        else:
+            if _ip == "":
+                log.warning("customization for %s NIC%d: empty ip string treated as DHCP", hostname, idx)
+            ip_settings.ip = vim.vm.customization.DhcpIpGenerator()
+        adapter.ip = ip_settings
+        adapters.append(adapter)
+    return adapters
 
 
 def build_linux_customization(
@@ -25,6 +90,8 @@ def build_linux_customization(
     except ImportError:
         return None
 
+    hostname = validate_hostname(hostname)
+
     # Identity
     linux_prep = vim.vm.customization.LinuxPrep()
     linux_prep.hostName = vim.vm.customization.FixedName(name=hostname)
@@ -45,33 +112,7 @@ def build_linux_customization(
     else:
         nic_defs = [{"ip": None}]
 
-    adapters: list[Any] = []
-    for nic in nic_defs:
-        _ip = nic.get("ip")
-        _netmask = nic.get("netmask")
-        _gateway = nic.get("gateway")
-        adapter = vim.vm.customization.AdapterMapping()
-        ip_settings = vim.vm.customization.IPSettings()
-        # ip == None/"" -> treat as DHCP (explicit caller should pass "dhcp")
-        if _ip and _ip not in ("dhcp", "auto"):
-            fixed = vim.vm.customization.FixedIp(ipAddress=_ip)
-            ip_settings.ip = fixed
-            if _netmask:
-                ip_settings.subnetMask = _netmask
-            if _gateway:
-                ip_settings.gateway = [_gateway]
-            if dns:
-                ip_settings.dnsServerList = dns
-        elif _ip == "":
-            # Empty string is not a valid FixedIp — treat as DHCP with warning
-            import logging
-
-            logging.getLogger(__name__).warning("build_linux_customization: empty ip string treated as DHCP for %s", hostname)
-            ip_settings.ip = vim.vm.customization.DhcpIpGenerator()
-        else:
-            ip_settings.ip = vim.vm.customization.DhcpIpGenerator()
-        adapter.ip = ip_settings
-        adapters.append(adapter)
+    adapters = _build_nic_adapters(vim, nic_defs, dns, hostname)
 
     spec = vim.vm.customization.Specification()
     spec.identity = linux_prep
@@ -105,6 +146,8 @@ def build_windows_customization(
     except ImportError:
         return None
 
+    hostname = validate_hostname(hostname)
+
     gui = vim.vm.customization.GuiUnattended()
     gui.autoLogon = False
     gui.password = vim.vm.customization.Password(value=password, plainText=True) if password else None
@@ -136,28 +179,7 @@ def build_windows_customization(
     else:
         nic_defs = [{"ip": None}]
 
-    adapters: list[Any] = []
-    for nic in nic_defs:
-        _ip = nic.get("ip")
-        _netmask = nic.get("netmask")
-        _gateway = nic.get("gateway")
-        adapter = vim.vm.customization.AdapterMapping()
-        ip_settings = vim.vm.customization.IPSettings()
-        if _ip and _ip not in ("dhcp", "auto"):
-            ip_settings.ip = vim.vm.customization.FixedIp(ipAddress=_ip)
-            if _netmask:
-                ip_settings.subnetMask = _netmask
-            if _gateway:
-                ip_settings.gateway = [_gateway]
-        elif _ip == "":
-            import logging
-
-            logging.getLogger(__name__).warning("build_windows_customization: empty ip string treated as DHCP for %s", hostname)
-            ip_settings.ip = vim.vm.customization.DhcpIpGenerator()
-        else:
-            ip_settings.ip = vim.vm.customization.DhcpIpGenerator()
-        adapter.ip = ip_settings
-        adapters.append(adapter)
+    adapters = _build_nic_adapters(vim, nic_defs, dns, hostname)
 
     spec = vim.vm.customization.Specification()
     spec.identity = sysprep

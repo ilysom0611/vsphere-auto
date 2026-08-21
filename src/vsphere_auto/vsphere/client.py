@@ -17,9 +17,10 @@ import logging
 import socket
 import ssl
 import threading
+import time
 from typing import Any
 
-from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 log = logging.getLogger(__name__)
 
@@ -107,6 +108,20 @@ def connect(
     t.start()
     t.join(timeout=timeout)
     if t.is_alive():
+        # Orphan-session mitigation: the abandoned thread may still complete
+        # its handshake seconds later, leaking a vCenter session. Schedule a
+        # delayed best-effort shutdown of whatever SmartConnect produced.
+        def _late_shutdown():
+            try:
+                time.sleep(45)
+                late_si = exc_holder[0] if exc_holder else None
+                if late_si is not None and not isinstance(late_si, BaseException):
+                    getattr(late_si, "ShutDown", lambda: None)()
+                    log.debug("connect: shut down late-completing session to %s:%s", host, port)
+            except Exception:
+                pass
+
+        threading.Thread(target=_late_shutdown, daemon=True).start()
         raise RuntimeError(
             f"Connection to {host}:{port} timed out after {timeout}s "
             f"(TLS/handshake blocked — curl -vk https://{host}:{port}/sdk should connect)"
@@ -147,20 +162,40 @@ def disconnect(si) -> None:
         pass
 
 
+def _unwrap_retryable(exc: BaseException) -> bool:
+    """Recursively unwrap RuntimeError __cause__ chains looking for a retryable error."""
+    seen: set[int] = set()
+    cur: BaseException | None = exc
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        if isinstance(cur, _RETRYABLE):
+            return True
+        cur = getattr(cur, "__cause__", None) or getattr(cur, "__context__", None)
+        # Stop at RuntimeError wrappers only — plain non-runtime causes are still unwrapped
+    return False
+
+
 def _is_retryable(exc: BaseException) -> bool:
-    # tenacity retry_if_exception also checks wrapped RuntimeError — unwrap
-    cause = getattr(exc, "__cause__", None) or exc
+    """Retry transient network/TLS errors; fail fast on auth/permission errors.
+
+    connect() wraps every failure in RuntimeError with __cause__ set, so we must
+    unwrap the cause chain to find the underlying socket.timeout/ssl.SSLError.
+    """
     # Auth / permission errors contain these substrings and must NOT be retried
-    msg = str(exc).lower() + str(cause).lower()
+    msg = str(exc).lower()
     if any(k in msg for k in ("invalid login", "incorrect user", "permission", "not authorized", "login failed")):
         return False
-    return isinstance(cause, _RETRYABLE) or isinstance(exc, _RETRYABLE)
+    if isinstance(exc, _RETRYABLE):
+        return True
+    if isinstance(exc, RuntimeError):
+        return _unwrap_retryable(getattr(exc, "__cause__", None))
+    return False
 
 
 @retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=1, max=8),
-    retry=retry_if_exception_type(_RETRYABLE),
+    retry=retry_if_exception(_is_retryable),
     reraise=True,
 )
 def connect_with_retry(

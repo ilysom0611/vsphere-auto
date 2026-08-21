@@ -43,7 +43,9 @@
   </div>
   <details>
     <summary>Advanced: paste YAML config</summary>
-    <textarea id="yamlInput" rows="12" placeholder="vms: [...]"></textarea>
+    <!-- NOTE: this parser accepts JSON-shaped config only (not full YAML). -->
+    <textarea id="yamlInput" rows="12" placeholder='{"vms": [...], "vcenter": {...}}'></textarea>
+    <div id="yamlError" style="display:none;color:#b00020;margin-top:6px;"></div>
   </details>
   <div class="row">
     <button id="btnPlan">Preview Plan</button>
@@ -118,11 +120,27 @@ function fillSelects(inv){
   const net=document.getElementById('fNetwork'); net.innerHTML='<option value="auto">auto</option>';
   (inv.networks||[]).forEach(x=>{ const o=document.createElement('option'); o.value=x.name; o.textContent=x.name; net.appendChild(o); });
 }
+function showYamlError(msg){
+  const el=document.getElementById('yamlError');
+  if(msg){ el.textContent=msg; el.style.display=''; }
+  else { el.textContent=''; el.style.display='none'; }
+}
+// Returns the pasted JSON config, or null when the textarea holds text that
+// fails to parse (a visible error is shown near the textarea — we do NOT
+// silently fall back to the form values, which could deploy something else).
 function buildCfg(){
   const yaml=document.getElementById('yamlInput').value.trim();
-  if(yaml){ try{
-    return JSON.parse(yaml);
-  }catch(e){ /* ignore, build from form */ }}
+  if(yaml){
+    // The parser here accepts JSON-shaped config only, not full YAML.
+    try{
+      showYamlError('');
+      return JSON.parse(yaml);
+    }catch(e){
+      showYamlError('Config parse error: '+(e&&e.message||e)+' — fix the JSON in the textarea or clear it to use the form values.');
+      return null;
+    }
+  }
+  showYamlError('');
   const credsId=document.getElementById('credsSelect').value;
   const count=parseInt(document.getElementById('fCount').value||'1',10);
   const naming=document.getElementById('fNaming').value;
@@ -144,12 +162,14 @@ function buildCfg(){
 }
 async function doPlan(){
   const cfg=buildCfg();
+  if(!cfg) return;
   const r=await fetch('/api/plan',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({config:cfg})});
   const j=await r.json();
   document.getElementById('planResult').textContent=JSON.stringify(j,null,2);
 }
 async function doDeploy(){
   const cfg=buildCfg();
+  if(!cfg) return;
   const r=await fetch('/api/deploy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({config:cfg})});
   const j=await r.json();
   document.getElementById('deployResult').textContent=JSON.stringify(j,null,2);

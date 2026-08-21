@@ -31,10 +31,14 @@ class VCenterConfig(BaseModel):
 
 class DefaultsConfig(BaseModel):
     folder: str = "workloads/demo"
+    # Reserved for future use — not consumed by any code path yet (kept so old
+    # YAML files keep validating; values are silently ignored).
     resourcePool: Optional[str] = None
     guestId: str = "ubuntu64Guest"
     firmware: Literal["bios", "efi"] = "bios"
     hardwareVersion: Optional[str] = None
+    # Consumed by batch.planner.expand_batch when generating VMs from `count`.
+    template: Optional[str] = None
 
 
 class BatchConfig(BaseModel):
@@ -48,6 +52,8 @@ class IpPoolConfig(BaseModel):
     gateway: Optional[str] = None
     netmask: Optional[str] = None
     dns: list[str] = Field(default_factory=list)
+    # Reserved for future use — leases are always persisted to the default
+    # state dir (state/ip_pools.json); this knob is currently not consumed.
     poolsFile: Optional[str] = None
 
 
@@ -66,6 +72,7 @@ class VmSpec(BaseModel):
     guestId: Optional[str] = None
     folder: Optional[str] = None
     networks: list[VmNetworkConfig] = Field(default_factory=lambda: [VmNetworkConfig()])
+    # Reserved for future use — not consumed by any code path yet.
     extraConfig: dict[str, str] = Field(default_factory=dict)
 
 
@@ -75,6 +82,11 @@ class AppConfig(BaseModel):
     batch: BatchConfig = Field(default_factory=BatchConfig)
     ipPool: IpPoolConfig = Field(default_factory=IpPoolConfig)
     vms: list[VmSpec] = Field(default_factory=list)
+    # Top-level fields consumed by batch.planner.expand_batch when `vms` is
+    # empty: generate `count` VMs named via batch.naming from `template`.
+    # Must live on the model (not just YAML) or model_dump() drops them.
+    count: Optional[int] = None
+    template: Optional[str] = None
 
 
 def load_config(path: str | Path) -> AppConfig:

@@ -1,8 +1,13 @@
 """Flask app factory."""
 from __future__ import annotations
 
-from flask import Flask, render_template, send_from_directory
+import logging
+import os
+
+from flask import Flask, jsonify, render_template, request
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 
 def create_app() -> Flask:
@@ -20,6 +25,33 @@ def create_app() -> Flask:
     app.register_blueprint(discover_bp)
     app.register_blueprint(deploy_bp)
     app.register_blueprint(tasks_bp)
+
+    # Best-effort recovery: mark tasks/batches left in running/pending by a
+    # previous crash as interrupted so the UI does not show phantom runs.
+    try:
+        from ..batch.state import recover_interrupted
+
+        tasks_marked, batches_marked = recover_interrupted()
+        if tasks_marked or batches_marked:
+            log.info("startup recovery: marked %d task(s), %d batch(es) as interrupted", tasks_marked, batches_marked)
+    except Exception as e:
+        log.warning("startup recovery of interrupted batches failed: %s", e)
+
+    # Optional API-token auth. When VSPHERE_API_TOKEN is unset/empty the app
+    # behaves exactly as before (loopback-bound deployments, no auth).
+    api_token = (os.environ.get("VSPHERE_API_TOKEN") or "").strip()
+    if api_token:
+
+        @app.before_request
+        def _check_api_token():
+            provided = request.headers.get("X-API-Token", "").strip()
+            if not provided:
+                auth = request.headers.get("Authorization", "")
+                if auth.startswith("Bearer "):
+                    provided = auth[len("Bearer "):].strip()
+            if provided != api_token:
+                return jsonify({"error": "unauthorized: missing or invalid API token"}), 401
+            return None
 
     @app.get("/")
     def index():

@@ -19,9 +19,22 @@ else
   SCRIPT_DIR="$(cd "$(dirname "$_SRC")" && pwd)"
 fi
 cd "$SCRIPT_DIR"
+
+# ---------------------------------------------------------------------------
+# Flags
+#   --install-service : also install/refresh the systemd unit (best-effort)
+# ---------------------------------------------------------------------------
+INSTALL_SERVICE=0
+for _arg in "$@"; do
+  case "$_arg" in
+    --install-service) INSTALL_SERVICE=1 ;;
+    *) : ;;  # unknown flags ignored for forward-compat
+  esac
+done
+
 echo "Installing vsphere-auto..."
 # If invoked via `curl | bash` the repo is not present — clone it.
-if [ ! -f "pyproject.toml" ] && [ ! -f "setup.py" ]; then
+if [ ! -f "pyproject.toml" ]; then
   echo "[install] No pyproject.toml in $SCRIPT_DIR — checking for existing checkout..."
   if [ -f "vsphere-auto/pyproject.toml" ]; then
     echo "[install] Found vsphere-auto/pyproject.toml — cd there"
@@ -31,7 +44,13 @@ if [ ! -f "pyproject.toml" ] && [ ! -f "setup.py" ]; then
     echo "[install] Cloning https://github.com/ilysom0611/vsphere-auto.git ..."
     if [ -d "vsphere-auto" ]; then
       echo "[install] Directory vsphere-auto already exists — updating"
-      git -C vsphere-auto pull --ff-only 2>&1 | tail -3 || true
+      if ! _pull_out="$(git -C vsphere-auto pull --ff-only 2>&1)"; then
+        echo "$_pull_out" | tail -3
+        echo "[install] WARNING: 'git pull' failed — proceeding with the EXISTING checkout,"
+        echo "[install]          which may be STALE. Update manually: git -C vsphere-auto pull --ff-only"
+      else
+        echo "$_pull_out" | tail -3
+      fi
       cd vsphere-auto
     else
       git clone https://github.com/ilysom0611/vsphere-auto.git vsphere-auto 2>&1 | tail -5 || {
@@ -139,24 +158,9 @@ fi
 
 echo "[install] Using Python: $PYBIN ($($PYBIN --version 2>&1))"
 
-# Ensure pip is modern (>=19) for the chosen interpreter.
-# `pip install --upgrade pip` fails on pip 8 (no PEP 517), so use get-pip.py.
-PIP_VER=""
-if "$PYBIN" -m pip --version >/dev/null 2>&1; then
-  PIP_VER="$("$PYBIN" -m pip --version 2>/dev/null | sed -n 's/.*pip \([0-9]*\)\..*/\1/p')"
-fi
-if [ -z "$PIP_VER" ] || [ "$PIP_VER" -lt 19 ] 2>/dev/null; then
-  echo "[install] pip too old or missing (pip $PIP_VER) — bootstrapping via get-pip.py..."
-  if command -v curl >/dev/null 2>&1; then
-    curl -fsSL https://bootstrap.pypa.io/get-pip.py | "$PYBIN" 2>&1 | tail -5 || true
-  elif command -v wget >/dev/null 2>&1; then
-    wget -qO- https://bootstrap.pypa.io/get-pip.py | "$PYBIN" 2>&1 | tail -5 || true
-  else
-    echo "[install] curl/wget not found, trying ensurepip..."
-    "$PYBIN" -m ensurepip --upgrade 2>&1 | tail -5 || true
-  fi
-  "$PYBIN" -m pip install --upgrade setuptools wheel 2>&1 | tail -5 || true
-fi
+# NOTE: We deliberately do NOT bootstrap pip/setuptools/wheel into the SYSTEM
+# interpreter (get-pip against system site-packages breaks dpkg/apt-managed
+# installs). pip is only ever upgraded inside the venv we create below.
 
 # Persist the interpreter for start.sh. For uv-managed interpreters this is a
 # bare cpython binary without an associated environment — we create a venv next
@@ -180,15 +184,44 @@ fi
 if [ "$NEED_VENV" = 1 ]; then
   if [ ! -x ".venv/bin/python" ]; then
     echo "[install] Creating virtualenv .venv with $PYBIN..."
-    "$PYBIN" -m venv .venv 2>&1 || "$PYBIN" -m virtualenv .venv 2>&1 || {
-      echo "[install] venv creation failed, will install to user/site instead"
-      NEED_VENV=0
-    }
+    if ! "$PYBIN" -m venv .venv 2>/dev/null; then
+      # Missing ensurepip (common on Debian/Ubuntu without python3-venv, or
+      # uv-managed pythons) — bootstrap pip INSIDE the venv, never system-wide.
+      echo "[install] plain 'python -m venv' failed (ensurepip missing?) — retrying without pip..."
+      if "$PYBIN" -m venv --without-pip .venv 2>/dev/null; then
+        echo "[install] Bootstrapping pip inside .venv (get-pip targeted at the venv python)..."
+        if command -v curl >/dev/null 2>&1; then
+          curl -fsSL https://bootstrap.pypa.io/get-pip.py | .venv/bin/python 2>&1 | tail -5 || true
+        elif command -v wget >/dev/null 2>&1; then
+          wget -qO- https://bootstrap.pypa.io/get-pip.py | .venv/bin/python 2>&1 | tail -5 || true
+        else
+          .venv/bin/python -m ensurepip --upgrade 2>&1 | tail -5 || true
+        fi
+      else
+        "$PYBIN" -m virtualenv .venv 2>&1 || {
+          echo "[install] venv creation failed, will install to user/site instead"
+          NEED_VENV=0
+        }
+      fi
+    fi
   fi
   if [ -x ".venv/bin/python" ]; then
     VENV_PY=".venv/bin/python"
     echo "[install] venv python: $VENV_PY ($($VENV_PY --version 2>&1))"
-    # Keep venv pip modern too
+    # Keep venv pip modern (>=19 for PEP 517). Only ever inside the venv.
+    VENV_PIP_VER=""
+    if "$VENV_PY" -m pip --version >/dev/null 2>&1; then
+      VENV_PIP_VER="$("$VENV_PY" -m pip --version 2>/dev/null | sed -n 's/.*pip \([0-9]*\)\..*/\1/p')"
+    fi
+    if [ -z "$VENV_PIP_VER" ] || [ "$VENV_PIP_VER" -lt 19 ] 2>/dev/null; then
+      echo "[install] venv pip too old or missing (pip ${VENV_PIP_VER:-none}) — bootstrapping inside the venv..."
+      "$VENV_PY" -m ensurepip --upgrade 2>&1 | tail -3 || true
+      if command -v curl >/dev/null 2>&1; then
+        curl -fsSL https://bootstrap.pypa.io/get-pip.py | "$VENV_PY" 2>&1 | tail -5 || true
+      elif command -v wget >/dev/null 2>&1; then
+        wget -qO- https://bootstrap.pypa.io/get-pip.py | "$VENV_PY" 2>&1 | tail -5 || true
+      fi
+    fi
     "$VENV_PY" -m pip install --upgrade pip setuptools wheel 2>&1 | tail -3 || true
   fi
 fi
@@ -209,17 +242,14 @@ elif command -v uv >/dev/null 2>&1; then
   echo "[install] Installing with uv (using $PYBIN)..."
   uv sync --python "$PYBIN" 2>&1 || uv pip install -e . --python "$PYBIN" 2>&1 || "$PYBIN" -m pip install -e . 2>&1 || {
     echo "[install] uv install failed, falling back to pip..."
-    "$PYBIN" -m pip install -e . 2>&1 || "$PYBIN" setup.py develop 2>&1 || "$PYBIN" -m pip install --no-build-isolation -e . 2>&1
+    "$PYBIN" -m pip install -e . 2>&1 || "$PYBIN" -m pip install --no-build-isolation -e . 2>&1
   }
 else
   echo "[install] Installing with pip ($INSTALL_PY -m pip)..."
   "$INSTALL_PY" -m pip install -e . 2>&1 || "$INSTALL_PY" -m pip install --no-build-isolation -e . 2>&1 || {
-    echo "[install] pip install failed — trying setup.py fallback..."
-    "$INSTALL_PY" setup.py develop 2>&1 || {
-      echo "[install] ERROR: install failed. Try manually:"
-      echo "  $INSTALL_PY -m pip install -e . -v"
-      exit 1
-    }
+    echo "[install] ERROR: install failed. Try manually:"
+    echo "  $INSTALL_PY -m pip install -e . -v"
+    exit 1
   }
 fi
 
@@ -228,6 +258,56 @@ if [ -n "$VENV_PY" ] && [ -x "$VENV_PY" ]; then
   echo "$VENV_PY" > state/.python_bin 2>/dev/null || true
   echo "$VENV_PY" > state/.venv_python 2>/dev/null || true
 fi
+
+# ---------------------------------------------------------------------------
+# 3) Optional: install the systemd unit (--install-service, best-effort)
+# ---------------------------------------------------------------------------
+install_service() {
+  if ! command -v systemctl >/dev/null 2>&1; then
+    echo "[install] systemctl not available — skipping service installation."
+    return 0
+  fi
+  if [ "$(id -u)" != "0" ]; then
+    echo "[install] --install-service needs root. Re-run with: sudo bash install.sh --install-service"
+    return 0
+  fi
+  local svc_src="$SCRIPT_DIR/systemd/vsphere-auto.service"
+  if [ ! -f "$svc_src" ]; then
+    echo "[install] WARNING: $svc_src not found — skipping service installation."
+    return 0
+  fi
+  local esc_dir
+  esc_dir="$(printf '%s' "$SCRIPT_DIR" | sed 's/[&/\]/\\&/g')"
+  echo "[install] Installing systemd unit -> /etc/systemd/system/vsphere-auto.service"
+  sed -e "s#/opt/vsphere-auto#$esc_dir#g" "$svc_src" > /etc/systemd/system/vsphere-auto.service || {
+    echo "[install] WARNING: could not write /etc/systemd/system/vsphere-auto.service — skipping."
+    return 0
+  }
+  mkdir -p "$SCRIPT_DIR/state" || true
+  # The unit runs as User=vsphereauto by default (hardening) — create it or adjust.
+  if ! id vsphereauto >/dev/null 2>&1; then
+    echo "[install] NOTE: the unit uses User=vsphereauto which does not exist yet:"
+    echo "          sudo useradd -r -s /sbin/nologin -d $SCRIPT_DIR vsphereauto"
+    echo "          sudo chown -R vsphereauto:vsphereauto $SCRIPT_DIR"
+    echo "          (or edit User=/Group= in the unit to an existing user)"
+  fi
+  systemctl daemon-reload || true
+  echo "[install] Unit installed. Start it with:"
+  echo "  sudo systemctl enable --now vsphere-auto"
+}
+
+if [ "$INSTALL_SERVICE" = 1 ]; then
+  install_service
+fi
+
+echo ""
+echo "--- Security notes ---"
+echo "  * The Web UI binds 127.0.0.1 by default (start.sh honours VSPHERE_HOST)."
+echo "    Do NOT expose it remotely without setting VSPHERE_API_TOKEN first and/or"
+echo "    putting a reverse proxy with auth/TLS in front of port 8080."
+echo "  * Consider firewalld rules for port 8080 if you do expose it:"
+echo "    firewall-cmd --add-port=8080/tcp --permanent && firewall-cmd --reload"
+echo "----------------------"
 
 echo ""
 echo "Done. Python: $INSTALL_PY ($($INSTALL_PY --version 2>&1))"
