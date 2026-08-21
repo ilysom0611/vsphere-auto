@@ -112,7 +112,10 @@ def _collect_inventory(content, timeout: int = _VIEW_TIMEOUT) -> list[Any]:
     exc_holder: list[BaseException] = []
 
     def _spec(vtype, paths: list[str]):
-        return vim.PropertySpec(type=vtype.__name__, all=False, pathSet=paths)
+        # PropertySpec.type must be the vmodl TYPE OBJECT (e.g. vim.Datacenter),
+        # not its string name — pyVmomi's type checking rejects str here with
+        # 'For "type" expected type type, but got str'.
+        return vim.PropertySpec(type=vtype, all=False, pathSet=paths)
 
     def _target():
         view = None
