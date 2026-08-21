@@ -31,7 +31,7 @@ Automated, **Linux-first** batch VM deployment for **vSphere (vCenter / ESXi)**.
 | CentOS Stream / Fedora | latest | ⚠️ Community | Should work; not formally tested in CI. |
 | macOS | 13+ | 🛠️ Dev only | For development / `plan --dry-run`; not for production service. |
 
-**vSphere:** vCenter **7.0 U3+ / 8.0+** and ESXi 7.0/8.0. Direct ESXi connections work but some `CustomizationSpec` (guest customization) features require vCenter — the tool falls back automatically.
+**vSphere:** vCenter **6.7 / 7.0 U3+ / 8.0+** and ESXi 6.7/7.0/8.0. Direct ESXi connections work but some `CustomizationSpec` (guest customization) features require vCenter — the tool falls back automatically. On **6.7** the client relaxes TLS ciphers automatically (see Troubleshooting if discover still fails).
 
 **Why not CentOS 7 for new installs?** CentOS 7 reached EOL and ships Python 3.6 + pip 8 which cannot build this project. `install.sh` works around it, but you inherit an unpatched base OS. For any new host, use **Ubuntu 22.04/24.04** or **Rocky/Alma 9**.
 
@@ -319,6 +319,12 @@ docker run -p 8080:8080 -v ./state:/app/state -e VSPHERE_AUTO_KEY="$(cat state/.
 ## Troubleshooting
 
 **Cannot connect to vCenter?** Run `vsphere-auto creds test <name>` and check the output. Untrusted certificates are skipped by default; you can configure a CA if needed. Some `CustomizationSpec` features are unavailable with direct ESXi connections — the tool falls back automatically.
+
+**Discover shows "Failed" or "no feedback" (especially vSphere 6.7):** The Deploy page now prints the exact error. Common causes on **6.7.0 (e.g. 6.7.0.42000)**:
+  1. **TLS / cipher mismatch** — Old hosts negotiate TLS 1.0/1.1 or legacy ciphers blocked by Python 3.11 + OpenSSL 3.x. The client now lowers `SECLEVEL` to 1 and allows TLS 1.0+ automatically; if you still see `SSL: ...` or `handshake failed`, verify the host is reachable on `443` (`curl -vk https://<vc>:443/sdk`) and not blocked by a proxy/firewall.
+  2. **Wrong credential / port** — On the deploy page pick the saved credential (dropdown) and watch the status line; it will show `Failed: <reason>` instead of staying blank. Or run `vsphere-auto creds test <name>` from the CLI — it prints the same error.
+  3. **ESXi direct (no vCenter)** — `datacenters` will be `0` even on success; clusters/networks may be empty. The `summary` line in the status bar (`DC:0 clusters:0 ...`) is expected.
+  Re-run with `VSPHERE_DEBUG=1 bash start.sh` to get full stack traces in the server log.
 
 **ISO scan is slow?** Scanning large datastores is paginated/cached and not run on every `discover`. You can also skip scanning by setting `iso: "[datastore] path/to.iso"` directly.
 
