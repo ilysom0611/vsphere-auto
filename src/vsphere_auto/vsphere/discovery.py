@@ -89,63 +89,90 @@ _DS_PATHS = ["name", "summary.capacity", "summary.freeSpace", "summary.type", "s
 
 
 def _collect_inventory(content, timeout: int = _VIEW_TIMEOUT) -> list[Any]:
-    """Bulk-retrieve inventory properties via one ContainerView + PropertyFilterSpec.
+    """Bulk-retrieve inventory properties for the whole inventory.
+
+    Strategy (validated against a vCenter 6.7.3 demo appliance with ~300 VMs):
+      1. one CreateContainerView per type to collect direct object refs
+         (``view.view`` is a single bulk SOAP response);
+      2. ONE RetrieveProperties call whose objectSet lists every object
+         explicitly — no TraversalSpec/view-filter magic that some servers
+         (6.7 demo/proxy appliances) answer with an empty result set;
+      3. servers that reject individual properties (seen: VirtualMachine.host
+         answered InvalidProperty on a restricted appliance) are handled by
+         dropping the offending path and retrying.
 
     Returns list[vim.vmodl.query.PropertyCollector.ObjectContent].
-    Raises _InventoryTimeout on hard timeout (the worker thread's finally block
-    destroys the view whenever it eventually unblocks).
+    Raises _InventoryTimeout on hard timeout.
     """
     from pyVmomi import vim
 
-    view_types = [
-        vim.Datacenter,
-        vim.ClusterComputeResource,
-        vim.ComputeResource,
-        vim.HostSystem,
-        vim.Datastore,
-        vim.Network,
-        vim.Folder,
-        vim.ResourcePool,
-        vim.VirtualMachine,
+    type_paths: list[tuple[Any, list[str]]] = [
+        (vim.Datacenter, ["name"]),
+        (vim.ClusterComputeResource, ["name", "host"]),
+        (vim.ComputeResource, ["name", "host"]),
+        (vim.HostSystem, ["name"]),
+        (vim.Datastore, _DS_PATHS),
+        (vim.Network, ["name"]),
+        (vim.Folder, ["name"]),
+        (vim.ResourcePool, ["name"]),
+        (vim.VirtualMachine, list(_VM_PATHS)),
     ]
     holder: list[Any] = []
     exc_holder: list[BaseException] = []
 
-    def _spec(vtype, paths: list[str]):
-        # PropertySpec.type must be the vmodl TYPE OBJECT (e.g. vim.Datacenter),
-        # not its string name — pyVmomi's type checking rejects str here with
-        # 'For "type" expected type type, but got str'.
-        return vim.PropertySpec(type=vtype, all=False, pathSet=paths)
+    def _retrieve(pc, objects, prop_specs):
+        filter_spec = vim.PropertyFilterSpec(
+            objectSet=[vim.ObjectSpec(obj=o) for o in objects],
+            propSet=prop_specs,
+        )
+        return pc.RetrieveProperties([filter_spec])
 
     def _target():
-        view = None
+        views = []
         try:
             pc = content.propertyCollector
-            view = content.viewManager.CreateContainerView(content.rootFolder, view_types, True)
-            filter_kwargs: dict[str, Any] = dict(
-                objectSet=[vim.ObjectSpec(obj=view)],
-                propSet=[
-                    _spec(vim.Datacenter, ["name"]),
-                    _spec(vim.ClusterComputeResource, ["name", "host"]),
-                    _spec(vim.ComputeResource, ["name", "host"]),
-                    _spec(vim.HostSystem, ["name"]),
-                    _spec(vim.Datastore, _DS_PATHS),
-                    _spec(vim.Network, ["name"]),
-                    _spec(vim.Folder, ["name"]),
-                    _spec(vim.ResourcePool, ["name"]),
-                    _spec(vim.VirtualMachine, _VM_PATHS),
-                ],
-            )
-            # Field added in newer API versions — pyVmomi only knows it when its
-            # type info was negotiated against a recent vCenter (6.7 lacks it).
-            if "reportMissingObjectsInViews" in getattr(vim.PropertyFilterSpec, "_propInfo", {}):
-                filter_kwargs["reportMissingObjectsInViews"] = True
-            filter_spec = vim.PropertyFilterSpec(**filter_kwargs)
-            holder.append(pc.RetrieveProperties([filter_spec]))
+            objects: list[Any] = []
+            prop_specs: list[Any] = []
+            for vtype, paths in type_paths:
+                view = content.viewManager.CreateContainerView(content.rootFolder, [vtype], True)
+                views.append(view)
+                objs = list(getattr(view, "view", []) or [])
+                if not objs:
+                    continue
+                objects.extend(objs)
+                # PropertySpec.type must be the vmodl TYPE OBJECT, not its name —
+                # pyVmomi's client-side check rejects str with
+                # 'For "type" expected type type, but got str'.
+                prop_specs.append(vim.PropertySpec(type=vtype, all=False, pathSet=list(paths)))
+            if not objects:
+                return
+            dropped: dict[str, list[str]] = {}
+            for attempt in range(6):
+                try:
+                    holder.append(_retrieve(pc, objects, prop_specs))
+                    return
+                except Exception as e:  # noqa: BLE001 - retried below / raised after loop
+                    bad = str(getattr(e, "name", "") or "")
+                    if not bad:
+                        raise
+                    # Server rejected a property (restricted appliances do this).
+                    # Remove it from every spec still carrying it and retry.
+                    progress = False
+                    for spec in prop_specs:
+                        paths = list(getattr(spec, "pathSet", []) or [])
+                        if bad in paths:
+                            paths.remove(bad)
+                            spec.pathSet = paths or ["name"]
+                            dropped.setdefault(spec.type.__name__, []).append(bad)
+                            progress = True
+                    log.warning("discover: server rejected property %r (%s); retrying without it", bad, type(e).__name__)
+                    if not progress:
+                        raise
+            raise RuntimeError(f"inventory retrieval kept failing after dropping rejected properties: {sorted(dropped)}")
         except BaseException as e:  # noqa: BLE001 - propagated to caller below
             exc_holder.append(e)
         finally:
-            if view is not None:
+            for view in views:
                 try:
                     view.Destroy()
                 except Exception:
