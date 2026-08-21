@@ -11,8 +11,8 @@ Linux 主机运行，面向 **vSphere (vCenter / ESXi)** 的虚拟机批量部�
 ### 方式 A：git 一键（推荐）
 
 ```bash
-git clone https://github.com/ilysom0611/doc-translator.git
-cd doc-translator/vsphere-auto
+git clone https://github.com/ilysom0611/vsphere-auto.git
+cd vsphere-auto
 bash install.sh
 bash start.sh
 # 浏览器打开 http://localhost:8080
@@ -21,16 +21,16 @@ bash start.sh
 ### 方式 B：curl 一键（无需先 clone）
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ilysom0611/doc-translator/main/vsphere-auto/install.sh | bash -s -- --from-curl
+curl -fsSL https://raw.githubusercontent.com/ilysom0611/vsphere-auto/main/install.sh | bash -s -- --from-curl
 # 或分步：
-curl -fsSL https://raw.githubusercontent.com/ilysom0611/doc-translator/main/vsphere-auto/install.sh -o /tmp/install-vsphere-auto.sh && bash /tmp/install-vsphere-auto.sh
+curl -fsSL https://raw.githubusercontent.com/ilysom0611/vsphere-auto/main/install.sh -o /tmp/install-vsphere-auto.sh && bash /tmp/install-vsphere-auto.sh
 bash vsphere-auto/start.sh
 ```
 
 ### 方式 C：uv 用户
 
 ```bash
-git clone https://github.com/ilysom0611/doc-translator.git && cd doc-translator/vsphere-auto
+git clone https://github.com/ilysom0611/vsphere-auto.git && cd vsphere-auto
 uv sync && uv run vsphere-auto --help
 uv run vsphere-auto serve --port 8080
 ```
