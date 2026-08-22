@@ -1,27 +1,27 @@
 {% extends "base.html" %}
 {% block title %}Settings / Credentials - vSphere Auto{% endblock %}
 {% block content %}
-<h1>Settings / Credentials</h1>
-<p class="muted">Save vCenter / ESXi endpoints and accounts. Passwords are encrypted with Fernet before being written to <code>state/creds.db</code> and can be updated at any time. Deployments can reference them by name.</p>
+<h1>设置 / 凭据</h1>
+<p class="muted">保存 vCenter / ESXi 端点与账号。密码经 Fernet 加密后写入 <code>state/creds.db</code>，可随时更新；部署时按名称引用。</p>
 
 <section class="card">
-  <h2>Saved Credentials</h2>
-  <table id="credsTable" class="table"><thead><tr><th>ID</th><th>Name</th><th>Host</th><th>User</th><th>Type</th><th>Updated</th><th>Actions</th></tr></thead><tbody></tbody></table>
+  <h2>已保存的凭据</h2>
+  <table id="credsTable" class="table"><thead><tr><th>ID</th><th>名称</th><th>主机</th><th>用户</th><th>类型</th><th>更新时间</th><th>操作</th></tr></thead><tbody></tbody></table>
 </section>
 
 <section class="card">
-  <h2 id="formTitle">Add Credential</h2>
+  <h2 id="formTitle">添加凭据</h2>
   <div class="grid2">
-    <label>Name <input id="fName" placeholder="prod-vc"></label>
-    <label>Host <input id="fHost" placeholder="10.0.0.10"></label>
-    <label>Port <input id="fPort" value="443"></label>
-    <label>Type <select id="fType"><option value="vcenter">vcenter</option><option value="esxi">esxi</option></select></label>
-    <label>Username <input id="fUser" placeholder="administrator@vsphere.local"></label>
-    <label>Password <input id="fPass" type="password" placeholder="Leave blank to keep unchanged when editing"></label>
+    <label>名称 <input id="fName" placeholder="prod-vc"></label>
+    <label>主机 <input id="fHost" placeholder="10.0.0.10"></label>
+    <label>端口 <input id="fPort" value="443"></label>
+    <label>类型 <select id="fType"><option value="vcenter">vcenter</option><option value="esxi">esxi</option></select></label>
+    <label>用户名 <input id="fUser" placeholder="administrator@vsphere.local"></label>
+    <label>密码 <input id="fPass" type="password" placeholder="编辑时留空表示不修改"></label>
   </div>
   <div class="row">
-    <button id="btnSave">Save</button>
-    <button id="btnCancel" style="display:none">Cancel</button>
+    <button id="btnSave">保存</button>
+    <button id="btnCancel" style="display:none">取消</button>
     <span id="formMsg" class="muted"></span>
   </div>
 </section>
@@ -77,9 +77,9 @@ function tbHandler(){
 }
 async function editCred(id){
   const r=await fetch('/api/creds/'+encodeURIComponent(id)); const c=await r.json();
-  if(!r.ok||c.error){ alert('Failed to load credential #'+id); return; }
+  if(!r.ok||c.error){ alert('加载凭据 #'+id+' 失败'); return; }
   editingId=id;
-  document.getElementById('formTitle').textContent='Edit Credential #'+id;
+  document.getElementById('formTitle').textContent='编辑凭据 #'+id;
   document.getElementById('fName').value=c.name;
   document.getElementById('fHost').value=c.host;
   document.getElementById('fPort').value=c.port;
@@ -90,17 +90,47 @@ async function editCred(id){
 }
 document.getElementById('btnCancel').onclick=()=>{
   editingId=null;
-  document.getElementById('formTitle').textContent='Add Credential';
+  document.getElementById('formTitle').textContent='添加凭据';
   document.getElementById('fName').value=''; document.getElementById('fHost').value=''; document.getElementById('fPort').value='443'; document.getElementById('fUser').value=''; document.getElementById('fPass').value='';
   document.getElementById('btnCancel').style.display='none';
   document.getElementById('formMsg').textContent='';
+  document.getElementById('formMsg').className='muted';
 };
 async function testCred(id){
-  const r=await fetch(`/api/creds/${id}/test`,{method:'POST'}); const j=await r.json();
-  alert(JSON.stringify(j,null,2));
+  // Inline colored result next to the tested row's button (replaces alert()).
+  document.querySelectorAll('.testResult').forEach(n=>n.remove());
+  const btn=document.querySelector(`button[data-action="test"][data-id="${id}"]`);
+  if(btn) btn.disabled=true;
+  try{
+    const r=await fetch(`/api/creds/${id}/test`,{method:'POST'}); const j=await r.json();
+    const span=document.createElement('span');
+    span.className='testResult';
+    if(r.ok && j.ok){
+      span.appendChild(badge('ok','连接成功'));
+      const s=j.summary||{};
+      const bits=[];
+      if(j.version) bits.push('vSphere '+j.version);
+      if(s.datacenters!==undefined) bits.push('数据中心 '+s.datacenters);
+      if(s.hosts!==undefined) bits.push('主机 '+s.hosts);
+      if(bits.length) span.appendChild(document.createTextNode(' '+bits.join(' · ')));
+      if(j.warning){ span.appendChild(document.createTextNode(' ')); span.appendChild(badge('warn',j.warning)); }
+    } else {
+      span.appendChild(badge('err','连接失败'));
+      if(j.error) span.appendChild(document.createTextNode(' '+j.error));
+    }
+    if(btn&&btn.parentElement) btn.parentElement.appendChild(span);
+  } finally {
+    if(btn) btn.disabled=false;
+  }
+}
+function badge(kind, text){
+  const b=document.createElement('span');
+  b.className='badge '+kind;
+  b.textContent=text;
+  return b;
 }
 async function delCred(id){
-  if(!confirm('Delete credential #'+id+'?')) return;
+  if(!confirm('确认删除凭据 #'+id+' ?')) return;
   await fetch(`/api/creds/${id}`,{method:'DELETE'});
   load();
 }
@@ -114,8 +144,11 @@ document.getElementById('btnSave').onclick=async()=>{
   const method=editingId?'PUT':'POST';
   const r=await fetch(url,{method,headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   const j=await r.json();
-  document.getElementById('formMsg').textContent=r.ok?'Saved':'Failed: '+(j.error||r.status);
-  if(r.ok){ editingId=null; document.getElementById('formTitle').textContent='Add Credential'; document.getElementById('btnCancel').style.display='none'; document.getElementById('fPass').value=''; load(); }
+  const msg=document.getElementById('formMsg');
+  msg.textContent='';
+  msg.className=r.ok?'msg-ok':'msg-err';
+  msg.textContent=r.ok?'已保存':'保存失败: '+(j.error||r.status);
+  if(r.ok){ editingId=null; document.getElementById('formTitle').textContent='添加凭据'; document.getElementById('btnCancel').style.display='none'; document.getElementById('fPass').value=''; load(); }
 };
 load();
 </script>

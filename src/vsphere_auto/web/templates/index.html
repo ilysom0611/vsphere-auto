@@ -4,52 +4,81 @@
 <h1>vSphere Batch Deploy</h1>
 
 <section class="card">
-  <h2>1. Select vCenter / ESXi</h2>
+  <h2>1. 选择 vCenter / ESXi 并发现资源</h2>
   <div class="row">
-    <select id="credsSelect"><option value="">-- Select saved credential --</option></select>
-    <button id="btnDiscover">Discover Resources</button>
+    <select id="credsSelect" style="max-width:320px"><option value="">-- 选择已保存的凭据 --</option></select>
+    <button id="btnDiscover">发现资源</button>
     <span id="discoverStatus" class="muted"></span>
   </div>
   <details>
-    <summary>Or use a temporary connection (not saved)</summary>
+    <summary>或使用临时连接（不保存）</summary>
     <div class="grid2">
-      <input id="tmpHost" placeholder="host (10.0.0.10)">
-      <input id="tmpUser" placeholder="user">
-      <input id="tmpPass" type="password" placeholder="password">
+      <input id="tmpHost" placeholder="主机 (10.0.0.10)">
+      <input id="tmpUser" placeholder="用户名">
+      <input id="tmpPass" type="password" placeholder="密码">
       <input id="tmpPort" placeholder="443" value="443">
     </div>
-    <button id="btnDiscoverTmp">Discover (temporary)</button>
+    <button id="btnDiscoverTmp">发现（临时连接）</button>
   </details>
-  <pre id="discoverResult" class="pre"></pre>
+  <div id="discoverResult"></div>
 </section>
 
 <section class="card">
-  <h2>2. VM Configuration</h2>
-  <div id="vmForm" class="grid2">
-    <label>Template <select id="fTemplate"><option value="">-- auto / select --</option></select></label>
-    <label>ISO <select id="fIso"><option value="">-- optional --</option></select></label>
-    <label>CPU <input id="fCpu" type="number" value="2" min="1"></label>
-    <label>Memory MB <input id="fMem" type="number" value="4096"></label>
-    <label>Disk GB <input id="fDisk" type="number" value="40"></label>
-    <label>Network <select id="fNetwork"><option value="auto">auto</option></select></label>
-    <label>IP <select id="fIp"><option value="auto">auto</option><option value="dhcp">dhcp</option></select> <input id="fIpVal" placeholder="or enter 10.0.0.11"></label>
-    <label>Folder <input id="fFolder" placeholder="workloads/demo"></label>
-    <label>Guest ID <input id="fGuest" value="ubuntu64Guest"></label>
+  <h2>2. 部署目标（可选，默认自动）</h2>
+  <div class="grid2">
+    <label><span class="lbl">数据存储（留空 = 自动选剩余空间最大）</span><select id="fDatastore"><option value="">auto</option></select></label>
+    <label><span class="lbl">文件夹（如 workloads/demo）</span><input id="fFolder" placeholder=""></label>
+  </div>
+</section>
+
+<section class="card modeRadio">
+  <h2>3. VM 定义方式</h2>
+  <label><input type="radio" name="vmMode" value="list" checked> 逐台定义（每台可不同规格）</label>
+  <label><input type="radio" name="vmMode" value="batch"> 批量生成（相同规格 + 命名模板）</label>
+
+  <!-- ======== list mode: one editor per VM ======== -->
+  <div id="listPanel">
+    <div id="vmList"></div>
+    <button id="btnAddVm">+ 添加 VM</button>
+  </div>
+
+  <!-- ======== batch mode ======== -->
+  <div id="batchPanel" style="display:none">
+    <div class="grid2">
+      <label><span class="lbl">模板</span><select class="bTemplate"><option value="">-- 请先发现资源 --</option></select></label>
+      <label><span class="lbl">ISO（可选）</span><select class="bIso"><option value="">-- 无 --</option></select></label>
+      <label><span class="lbl">CPU</span><input class="bCpu" type="number" value="2" min="1"></label>
+      <label><span class="lbl">内存 MB</span><input class="bMem" type="number" value="4096"></label>
+      <label><span class="lbl">磁盘 GB（只扩不缩）</span><input class="bDisk" type="number" value="40"></label>
+      <label><span class="lbl">网络</span><select class="bNetwork"><option value="">auto</option></select></label>
+      <label><span class="lbl">IP 分配</span><select class="bIpMode"><option value="dhcp">dhcp</option><option value="auto">auto（IP 池）</option></select></label>
+      <label><span class="lbl">Guest ID</span><input class="bGuest" value="ubuntu64Guest"></label>
+      <label><span class="lbl">数量</span><input id="fCount" type="number" value="1" min="1" style="width:80px"></label>
+      <label><span class="lbl">命名模板（须含 {index}）</span><input id="fNaming" value="demo-{index:02d}"></label>
+    </div>
+  </div>
+</section>
+
+<section class="card">
+  <h2>4. 网络参数与执行</h2>
+  <div class="grid3">
+    <label><span class="lbl">子网掩码（静态 IP 时必填）</span><input id="fNetmask" placeholder="255.255.255.0"></label>
+    <label><span class="lbl">网关</span><input id="fGateway" placeholder="10.0.0.1"></label>
+    <label><span class="lbl">DNS（逗号分隔）</span><input id="fDns" placeholder="10.0.0.2,8.8.8.8"></label>
   </div>
   <div class="row">
-    <label>Count <input id="fCount" type="number" value="1" min="1" style="width:80px"></label>
-    <label>Naming template <input id="fNaming" value="demo-{index:02d}"></label>
-    <label>Concurrency <input id="fConcurrency" type="number" value="5" min="1" max="20" style="width:80px"></label>
+    <label>并发 <input id="fConcurrency" type="number" value="5" min="1" max="20" style="width:80px"></label>
   </div>
   <details>
-    <summary>Advanced: paste YAML config</summary>
+    <summary>高级：粘贴 JSON 配置（覆盖表单）</summary>
     <!-- NOTE: this parser accepts JSON-shaped config only (not full YAML). -->
     <textarea id="yamlInput" rows="12" placeholder='{"vms": [...], "vcenter": {...}}'></textarea>
-    <div id="yamlError" style="display:none;color:#b00020;margin-top:6px;"></div>
+    <div id="yamlError" style="display:none;color:#f87171;margin-top:6px;"></div>
   </details>
   <div class="row">
-    <button id="btnPlan">Preview Plan</button>
-    <button id="btnDeploy" class="primary">Deploy</button>
+    <button id="btnPlan">预览计划</button>
+    <button id="btnDeploy" class="primary">部署</button>
+    <span id="planHint" class="muted"></span>
   </div>
   <pre id="planResult" class="pre"></pre>
   <div id="deployResult"></div>
@@ -57,17 +86,35 @@
 {% endblock %}
 {% block scripts %}
 <script>
+// All server-supplied values are rendered via textContent / value assignment
+// (never innerHTML interpolation) so inventory names cannot inject markup.
 let inventory=null;
+const LS_KEY='vsphereDeployForm';
+
+/* ---------- helpers ---------- */
+function el(tag, cls, text){ const e=document.createElement(tag); if(cls) e.className=cls; if(text!==undefined) e.textContent=text; return e; }
+function labeled(lblText, node){ const l=el('label'); l.appendChild(el('span','lbl',lblText)); l.appendChild(node); return l; }
+function sel(cls, opts){ const s=el('select',cls); (opts||[]).forEach(([v,t])=>{const o=el('option');o.value=v;o.textContent=t;s.appendChild(o);}); return s; }
+
+/* ---------- credentials ---------- */
 async function loadCreds(){
-  const r=await fetch('/api/creds'); const list=await r.json();
-  const sel=document.getElementById('credsSelect');
-  sel.innerHTML='<option value="">-- Select saved credential --</option>';
-  list.forEach(c=>{ const o=document.createElement('option'); o.value=c.id; o.textContent=`${c.name} (${c.host})`; sel.appendChild(o); });
+  try{
+    const r=await fetch('/api/creds'); const list=await r.json();
+    const selEl=document.getElementById('credsSelect');
+    const prev=selEl.value;
+    selEl.innerHTML='';
+    const def=el('option','', '-- 选择已保存的凭据 --'); def.value=''; selEl.appendChild(def);
+    list.forEach(c=>{ const o=el('option','', `${c.name} (${c.host})`); o.value=c.id; selEl.appendChild(o); });
+    if(prev) selEl.value=prev;
+    applySaved();
+  }catch(e){}
 }
+
+/* ---------- discover ---------- */
 async function doDiscover(useTmp){
   const status=document.getElementById('discoverStatus');
   const out=document.getElementById('discoverResult');
-  status.textContent='Discovering...';
+  status.textContent='正在发现资源...';
   out.textContent='';
   const b1=document.getElementById('btnDiscover'), b2=document.getElementById('btnDiscoverTmp');
   if(b1) b1.disabled=true; if(b2) b2.disabled=true;
@@ -76,7 +123,7 @@ async function doDiscover(useTmp){
     body={host:document.getElementById('tmpHost').value, username:document.getElementById('tmpUser').value, password:document.getElementById('tmpPass').value, port:document.getElementById('tmpPort').value};
   } else {
     const v=document.getElementById('credsSelect').value;
-    if(!v){ status.textContent='Please select a credential or use a temporary connection.'; if(b1) b1.disabled=false; if(b2) b2.disabled=false; return; }
+    if(!v){ status.textContent='请选择凭据或使用临时连接。'; if(b1) b1.disabled=false; if(b2) b2.disabled=false; return; }
     body={credsId:parseInt(v,10)};
   }
   let r,j,raw;
@@ -85,45 +132,174 @@ async function doDiscover(useTmp){
     raw=await r.text();
     try{ j=JSON.parse(raw); }catch(e){ j={raw:raw.slice(0,4000)}; }
   }catch(e){
-    status.textContent='Network/error: '+(e&&e.message||e);
-    out.textContent='Fetch failed: '+(e&&e.stack||e)+'\nTip: check vSphere host is reachable on 443 and credential is correct.';
+    status.innerHTML=''; status.appendChild(el('span','badge err','失败'));
+    status.appendChild(document.createTextNode(' '+(e&&e.message||e)));
     if(b1) b1.disabled=false; if(b2) b2.disabled=false;
     return;
   }
   if(b1) b1.disabled=false; if(b2) b2.disabled=false;
-  inventory=j;
-  out.textContent=JSON.stringify(j,null,2);
   if(!r.ok){
-    const msg=(j&&(j.error||j.detail))||('HTTP '+r.status+' '+raw.slice(0,500));
-    status.textContent='Failed: '+msg;
+    renderDiscover(j||{});
+    status.innerHTML=''; status.appendChild(el('span','badge err','失败'));
+    status.appendChild(document.createTextNode(' '+((j&&(j.error))||('HTTP '+r.status))));
     return;
   }
+  inventory=j;
+  renderDiscover(j);
+  fillSelects(j);
+  saveState();
+  const s=j.summary||{};
   if(j&&j.error && !j.summary){
-    status.textContent='Failed: '+j.error;
+    status.innerHTML=''; status.appendChild(el('span','badge err','失败'));
+    status.appendChild(document.createTextNode(' '+j.error));
     return;
   }
   if(j&&j.error){
-    status.textContent='Warning: '+j.error;
+    status.innerHTML=''; status.appendChild(el('span','badge warn','部分成功')); status.appendChild(document.createTextNode(' '+j.error));
   }else{
-    const s=j.summary||{};
-    const ver=j.version ? (' vSphere '+j.version+' api '+(j.apiVersion||'')) : '';
-    status.textContent='Done'+ver+' — DC:'+(s.datacenters||0)+' clusters:'+(s.clusters||0)+' ds:'+(s.datastores||0)+' nets:'+(s.networks||0)+' tmpl:'+(s.templates||0);
-    if(j.warning) status.textContent+=' (warning: '+j.warning+')';
+    status.innerHTML=''; status.appendChild(el('span','badge ok','成功'));
+    status.appendChild(document.createTextNode(` 数据中心 ${s.datacenters||0} · 集群 ${s.clusters||0} · 主机 ${s.hosts||0} · 存储 ${s.datastores||0} · 网络 ${s.networks||0} · 模板 ${s.templates||0}`));
   }
-  fillSelects(j);
 }
+
+/* friendly inventory rendering (values via textContent only) */
+function kvTable(headers, rows){
+  const t=el('table','table tblmini');
+  const thead=el('thead'); const hr=el('tr');
+  headers.forEach(h=>hr.appendChild(el('th','',h)));
+  thead.appendChild(hr); t.appendChild(thead);
+  const tb=el('tbody');
+  rows.forEach(r=>{ const tr=el('tr'); r.forEach(cell=>{
+    if(cell instanceof Node) tr.appendChild(el('td')).appendChild(cell);
+    else tr.appendChild(el('td','',cell));
+  }); tb.appendChild(tr); });
+  t.appendChild(tb);
+  return t;
+}
+function gb(n){ n=Number(n)||0; return n>=1024**3 ? (n/1024**3).toFixed(0)+' GB' : (n/1024**2).toFixed(0)+' MB'; }
+function badge(kind, text){ return el('span','badge '+kind, text); }
+function chipList(items, emptyText){
+  const d=el('div','');
+  if(!items||!items.length){ d.appendChild(el('span','muted',emptyText||'无')); return d; }
+  items.forEach(x=>d.appendChild(el('span','chip', x)));
+  return d;
+}
+function section(title, node){ const wrap=el('div'); wrap.appendChild(el('h3','',title)); wrap.appendChild(node); return wrap; }
+
+function renderDiscover(inv){
+  const out=document.getElementById('discoverResult');
+  out.innerHTML='';
+  if(!inv || (!inv.summary && !inv.datastores)){
+    const pre=el('pre','pre', JSON.stringify(inv,null,2)); out.appendChild(pre); return;
+  }
+  // datastores
+  const dsRows=(inv.datastores||[]).map(d=>{
+    const acc = d.accessible===false ? badge('err','不可访问') : badge('ok','正常');
+    return [d.name, gb(d.freeSpace), gb(d.capacity), String(d.type||''), acc];
+  });
+  // hosts: clusters then standalone
+  const hostRows=[];
+  (inv.clusters||[]).forEach(c=>hostRows.push([c.name,'集群',String(c.hostCount??''),(c.hosts||[]).map(h=>h.name).join(', ')]));
+  (inv.standaloneHosts||[]).forEach(h=>hostRows.push([h.name,'独立主机','','']));
+  // templates
+  const tplChips=(inv.templates||[]).map(t=>t.name);
+
+  out.appendChild(section(`数据存储 (${dsRows.length})`, dsRows.length?kvTable(['名称','剩余','容量','类型','状态'],dsRows):el('span','muted','无')));
+  if(hostRows.length) out.appendChild(section(`主机 (${hostRows.length})`, kvTable(['名称','类型','主机数','成员'],hostRows)));
+  out.appendChild(section(`网络 (${(inv.networks||[]).length})`, chipList((inv.networks||[]).map(n=>n.name))));
+  out.appendChild(section(`资源池 (${(inv.resourcePools||[]).length})`, chipList((inv.resourcePools||[]).map(p=>p.name))));
+  const det=el('details','rawjson');
+  det.appendChild(el('summary','','模板列表 ('+(inv.templates||[]).length+')'));
+  det.appendChild(chipList(tplChips,'无模板'));
+  out.appendChild(det);
+  const raw=el('details','rawjson');
+  raw.appendChild(el('summary','','原始 JSON'));
+  raw.appendChild(el('pre','pre', JSON.stringify(inv,null,2)));
+  out.appendChild(raw);
+}
+
 function fillSelects(inv){
-  const t=document.getElementById('fTemplate'); t.innerHTML='<option value="">-- auto / select --</option>';
-  (inv.templates||[]).forEach(x=>{ const o=document.createElement('option'); o.value=x.name; o.textContent=x.name; t.appendChild(o); });
-  const iso=document.getElementById('fIso'); iso.innerHTML='<option value="">-- optional --</option>';
-  (inv.isoImages||[]).forEach(x=>{ const o=document.createElement('option'); o.value=x.fullPath||x.path; o.textContent=x.fullPath||x.path; iso.appendChild(o); });
-  const net=document.getElementById('fNetwork'); net.innerHTML='<option value="auto">auto</option>';
-  (inv.networks||[]).forEach(x=>{ const o=document.createElement('option'); o.value=x.name; o.textContent=x.name; net.appendChild(o); });
+  const tpls=(inv.templates||[]).map(x=>[x.name,x.name]);
+  const nets=(inv.networks||[]).map(x=>[x.name,x.name]);
+  const dss=(inv.datastores||[]).filter(d=>d.accessible!==false).sort((a,b)=>(b.freeSpace||0)-(a.freeSpace||0)).map(d=>[d.name, `${d.name}（剩 ${gb(d.freeSpace)}）`]);
+  document.querySelectorAll('.vmEntry').forEach(e=>fillEntrySelects(e,tpls,nets));
+  ['bTemplate'].forEach(c=>{}); // batch selects
+  const bt=document.querySelector('.bTemplate'), bi=document.querySelector('.bIso'), bn=document.querySelector('.bNetwork');
+  if(bt){ const v=bt.value; bt.innerHTML=''; bt.appendChild(el('option','','-- 自动 / 选择 --')).value=''; tpls.forEach(([v2,t2])=>{const o=el('option','',t2);o.value=v2;bt.appendChild(o);}); bt.value=v; }
+  if(bi){ /* ISO list only after explicit scan */ }
+  if(bn){ const v=bn.value; bn.innerHTML=''; bn.appendChild(el('option','','auto')).value='auto'; nets.forEach(([v2,t2])=>{const o=el('option','',t2);o.value=v2;bn.appendChild(o);}); bn.value=v; }
+  const fd=document.getElementById('fDatastore');
+  if(fd){ const v=fd.dataset.pendingVal||fd.value; fd.innerHTML=''; const o=el('option','','auto（自动选择）'); o.value=''; fd.appendChild(o); dss.forEach(([v2,t2])=>{const oo=el('option','',t2);oo.value=v2;fd.appendChild(oo);}); try{ fd.value=v; }catch(e){} delete fd.dataset.pendingVal; }
+}
+function fillEntrySelects(entry,tpls,nets){
+  const t=entry.querySelector('.eTemplate');
+  if(t){ const v=t.value; t.innerHTML=''; const o=el('option','','-- 自动 / 选择 --'); o.value=''; t.appendChild(o); tpls.forEach(([v2,t2])=>{const oo=el('option','',t2);oo.value=v2;t.appendChild(oo);}); t.value=v; }
+  const n=entry.querySelector('.eNetwork');
+  if(n){ const v=n.value; n.innerHTML=''; const o=el('option','','auto'); o.value='auto'; n.appendChild(o); nets.forEach(([v2,t2])=>{const oo=el('option','',t2);oo.value=v2;n.appendChild(oo);}); n.value=v; }
+}
+
+/* ---------- per-VM entry editor ---------- */
+function addVmEntry(data){
+  data=data||{};
+  const entry=el('div','vmEntry');
+  const head=el('div','vmEntryHead');
+  head.appendChild(el('strong','', 'VM '+(data.name||'')));
+  const rm=el('button','','删除'); rm.type='button'; rm.className='rmBtn';
+  rm.onclick=()=>{ entry.remove(); renumber(); saveState(); };
+  head.appendChild(rm);
+  entry.appendChild(head);
+  const g1=el('div','grid2');
+  g1.appendChild(labeled('VM 名称 / 主机名', (()=>{const i=el('input','eName');i.placeholder='web-01';if(data.name)i.value=data.name;return i;})()));
+  g1.appendChild(labeled('模板', sel('eTemplate',[['','-- 请先发现资源 --']])));
+  const g2=el('div','grid3');
+  g2.appendChild(labeled('CPU', (()=>{const i=el('input','eCpu');i.type='number';i.min=1;i.value=data.cpu??2;return i;})()));
+  g2.appendChild(labeled('内存 MB', (()=>{const i=el('input','eMem');i.type='number';i.value=data.memoryMB??4096;return i;})()));
+  g2.appendChild(labeled('磁盘 GB', (()=>{const i=el('input','eDisk');i.type='number';i.value=data.diskGB??40;return i;})()));
+  const g3=el('div','grid3');
+  g3.appendChild(labeled('网络', sel('eNetwork',[['auto','auto']])));
+  g3.appendChild(labeled('IP 分配', sel('eIpMode',[['dhcp','dhcp'],['auto','auto（IP 池）'],['static','静态 IP']])));
+  g3.appendChild(labeled('静态 IP（选“静态”时填写）', (()=>{const i=el('input','eIp');i.placeholder='10.0.0.11';if(data.ip)i.value=data.ip;return i;})()));
+  const g4=el('div','grid2');
+  g4.appendChild(labeled('宿主机（可选）', (()=>{const i=el('input','eHost');i.placeholder='留空 = 自动放置';if(data.host)i.value=data.host;return i;})()));
+  g4.appendChild(labeled('资源池（可选）', (()=>{const i=el('input','eRp');i.placeholder='留空 = 默认';if(data.resourcePool)i.value=data.resourcePool;return i;})()));
+  entry.append(g1,g2,g3,g4);
+  entry.querySelectorAll('input,select').forEach(n=>{ n.addEventListener('input',saveState); n.addEventListener('change',()=>{ ipVisibility(entry); saveState(); }); });
+  document.getElementById('vmList').appendChild(entry);
+  fillEntrySelects(entry, currentTpls(), currentNets());
+  ipVisibility(entry);
+  return entry;
+}
+function ipVisibility(entry){
+  const mode=entry.querySelector('.eIpMode').value;
+  const ip=entry.querySelector('.eIp');
+  ip.parentElement.style.display = mode==='static' ? '' : 'none';
+}
+function currentTpls(){ return inventory?(inventory.templates||[]).map(x=>[x.name,x.name]):[]; }
+function currentNets(){ return inventory?(inventory.networks||[]).map(x=>[x.name,x.name]):[]; }
+function renumber(){
+  document.querySelectorAll('#vmList .vmEntryHead strong').forEach((s,i)=>{});
+}
+
+/* ---------- form <-> config ---------- */
+function entryCfg(entry, idx){
+  const ipMode=entry.querySelector('.eIpMode').value;
+  let ip = ipMode==='static' ? entry.querySelector('.eIp').value.trim() : ipMode;
+  const vm={
+    name: entry.querySelector('.eName').value.trim() || undefined,
+    template: entry.querySelector('.eTemplate').value || undefined,
+    cpu: parseInt(entry.querySelector('.eCpu').value,10),
+    memoryMB: parseInt(entry.querySelector('.eMem').value,10),
+    diskGB: parseInt(entry.querySelector('.eDisk').value,10),
+    networks: [{network: entry.querySelector('.eNetwork').value, ip}],
+  };
+  const hst=entry.querySelector('.eHost').value.trim(); if(hst) vm.host=hst;
+  const rp=entry.querySelector('.eRp').value.trim(); if(rp) vm.resourcePool=rp;
+  return vm;
 }
 function showYamlError(msg){
-  const el=document.getElementById('yamlError');
-  if(msg){ el.textContent=msg; el.style.display=''; }
-  else { el.textContent=''; el.style.display='none'; }
+  const elx=document.getElementById('yamlError');
+  if(msg){ elx.textContent=msg; elx.style.display=''; }
+  else { elx.textContent=''; elx.style.display='none'; }
 }
 // Returns the pasted JSON config, or null when the textarea holds text that
 // fails to parse (a visible error is shown near the textarea — we do NOT
@@ -131,54 +307,178 @@ function showYamlError(msg){
 function buildCfg(){
   const yaml=document.getElementById('yamlInput').value.trim();
   if(yaml){
-    // The parser here accepts JSON-shaped config only, not full YAML.
     try{
       showYamlError('');
       return JSON.parse(yaml);
     }catch(e){
-      showYamlError('Config parse error: '+(e&&e.message||e)+' — fix the JSON in the textarea or clear it to use the form values.');
+      showYamlError('配置解析错误: '+(e&&e.message||e)+' — 请修正 JSON 或清空以使用表单值。');
       return null;
     }
   }
   showYamlError('');
   const credsId=document.getElementById('credsSelect').value;
-  const count=parseInt(document.getElementById('fCount').value||'1',10);
-  const naming=document.getElementById('fNaming').value;
-  const ipSel=document.getElementById('fIp').value;
-  const ipVal=document.getElementById('fIpVal').value.trim();
-  const ip=ipVal||ipSel;
+  const mode=document.querySelector('input[name=vmMode]:checked').value;
   const vms=[];
-  for(let i=1;i<=count;i++){
-    const name=naming.replace('{index:02d}',String(i).padStart(2,'0')).replace('{index}',String(i));
-    vms.push({name, template:document.getElementById('fTemplate').value||undefined, iso:document.getElementById('fIso').value||undefined, cpu:parseInt(document.getElementById('fCpu').value,10), memoryMB:parseInt(document.getElementById('fMem').value,10), diskGB:parseInt(document.getElementById('fDisk').value,10), folder:document.getElementById('fFolder').value||undefined, guestId:document.getElementById('fGuest').value||undefined, networks:[{network:document.getElementById('fNetwork').value, ip}]});
+  let naming='';
+  if(mode==='list'){
+    const entries=[...document.querySelectorAll('#vmList .vmEntry')];
+    entries.forEach((e,i)=>{
+      const vm=entryCfg(e,i);
+      if(!vm.name){ vm.name='vm-'+String(i+1).padStart(2,'0'); }
+      vms.push(vm);
+    });
+  } else {
+    naming=document.getElementById('fNaming').value;
+    const count=parseInt(document.getElementById('fCount').value||'1',10);
+    const bp=document.querySelector('#batchPanel');
+    const ipSel=bp.querySelector('.bIpMode').value;
+    const template=bp.querySelector('.bTemplate').value||undefined;
+    const guest=bp.querySelector('.bGuest').value.trim();
+    const netName=bp.querySelector('.bNetwork').value;
+    for(let i=1;i<=count;i++){
+      const name=naming.replace('{index:02d}',String(i).padStart(2,'0')).replace('{index}',String(i));
+      const vm={name, cpu:parseInt(bp.querySelector('.bCpu').value,10), memoryMB:parseInt(bp.querySelector('.bMem').value,10), diskGB:parseInt(bp.querySelector('.bDisk').value,10), networks:[{network:netName||'auto', ip:ipSel}]};
+      if(template) vm.template=template;
+      if(guest) vm.guestId=guest;
+      vms.push(vm);
+    }
   }
-  const cfg={vms, batch:{concurrency:parseInt(document.getElementById('fConcurrency').value,10), onError:'continue', naming}, defaults:{folder:document.getElementById('fFolder').value||'workloads/demo'}};
-  if(credsId) cfg.vcenter={credsRef:credsId};
+  const cfg={vms, batch:{concurrency:parseInt(document.getElementById('fConcurrency').value,10), onError:'continue'}};
+  if(naming) cfg.batch.naming=naming;
+  const folder=document.getElementById('fFolder').value.trim();
+  const datastore=document.getElementById('fDatastore').value;
+  const defaults={};
+  if(folder) defaults.folder=folder;
+  if(datastore) cfg.vcenter=Object.assign(cfg.vcenter||{}, {datastore});
+  const netmask=document.getElementById('fNetmask').value.trim(), gateway=document.getElementById('fGateway').value.trim(), dns=document.getElementById('fDns').value.trim();
+  if(netmask||gateway||dns){
+    const pool={}; if(gateway)pool.gateway=gateway; if(netmask)pool.netmask=netmask; if(dns)pool.dns=dns.split(',').map(s=>s.trim()).filter(Boolean);
+    cfg.ipPool=pool;
+  }
+  if(Object.keys(defaults).length) cfg.defaults=defaults;
+  if(credsId) cfg.vcenter=Object.assign(cfg.vcenter||{}, {credsRef:credsId});
   else {
     const h=document.getElementById('tmpHost').value, u=document.getElementById('tmpUser').value, p=document.getElementById('tmpPass').value;
-    if(h&&u) cfg.vcenter={host:h, user:u, password:p, port:parseInt(document.getElementById('tmpPort').value,10)||443};
+    if(h&&u) cfg.vcenter=Object.assign(cfg.vcenter||{}, {host:h, user:u, password:p, port:parseInt(document.getElementById('tmpPort').value,10)||443});
   }
+  if(!cfg.vcenter) delete cfg.vcenter;
   return cfg;
 }
 async function doPlan(){
   const cfg=buildCfg();
   if(!cfg) return;
+  const hint=document.getElementById('planHint');
+  hint.textContent='计算中...';
   const r=await fetch('/api/plan',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({config:cfg})});
   const j=await r.json();
   document.getElementById('planResult').textContent=JSON.stringify(j,null,2);
+  hint.textContent=r.ok ? ('计划 OK — 共 '+j.count+' 台') : '';
 }
 async function doDeploy(){
   const cfg=buildCfg();
   if(!cfg) return;
   const r=await fetch('/api/deploy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({config:cfg})});
   const j=await r.json();
-  document.getElementById('deployResult').textContent=JSON.stringify(j,null,2);
-  if(j.batch_id) setTimeout(()=>location.href='/tasks',800);
+  const box=document.getElementById('deployResult');
+  box.innerHTML='';
+  if(r.ok && j.batch_id){
+    box.appendChild(el('span','badge run','已提交'));
+    box.appendChild(document.createTextNode(' 批次 '+j.batch_id+'（'+j.count+' 台）— 正在跳转到任务页...'));
+    setTimeout(()=>location.href='/tasks',800);
+  } else {
+    box.appendChild(el('span','badge err','提交失败'));
+    box.appendChild(document.createTextNode(' '+(j.error||('HTTP '+r.status))));
+  }
 }
+
+/* ---------- state persistence across pages (localStorage) ---------- */
+function saveState(){
+  try{
+    const st={
+      creds:document.getElementById('credsSelect').value,
+      mode:document.querySelector('input[name=vmMode]:checked').value,
+      common:{
+        datastore:document.getElementById('fDatastore').value,
+        folder:document.getElementById('fFolder').value,
+        netmask:document.getElementById('fNetmask').value,
+        gateway:document.getElementById('fGateway').value,
+        dns:document.getElementById('fDns').value,
+        concurrency:document.getElementById('fConcurrency').value,
+      },
+      batch:{
+        count:document.getElementById('fCount').value,
+        naming:document.getElementById('fNaming').value,
+        template:document.querySelector('.bTemplate').value,
+        cpu:document.querySelector('.bCpu').value,
+        mem:document.querySelector('.bMem').value,
+        disk:document.querySelector('.bDisk').value,
+        network:document.querySelector('.bNetwork').value,
+        ipMode:document.querySelector('.bIpMode').value,
+        guest:document.querySelector('.bGuest').value,
+      },
+      entries:[...document.querySelectorAll('#vmList .vmEntry')].map(e=>({
+        name:e.querySelector('.eName').value,
+        template:e.querySelector('.eTemplate').value,
+        cpu:e.querySelector('.eCpu').value,
+        memoryMB:e.querySelector('.eMem').value,
+        diskGB:e.querySelector('.eDisk').value,
+        network:e.querySelector('.eNetwork').value,
+        ipMode:e.querySelector('.eIpMode').value,
+        ip:e.querySelector('.eIp').value,
+        host:e.querySelector('.eHost').value,
+        resourcePool:e.querySelector('.eRp').value,
+      })),
+    };
+    localStorage.setItem(LS_KEY, JSON.stringify(st));
+  }catch(e){}
+}
+let stateApplied=false;
+function applySaved(){
+  if(stateApplied) return;
+  stateApplied=true;
+  let st; try{ st=JSON.parse(localStorage.getItem(LS_KEY)||'null'); }catch(e){ st=null; }
+  if(!st) return;
+  try{
+    if(st.creds!==undefined) document.getElementById('credsSelect').value=st.creds;
+    if(st.mode) document.querySelector(`input[name=vmMode][value=${st.mode}]`).checked=true;
+    syncModePanels();
+    const c=st.common||{};
+    for(const [id,v] of Object.entries({fDatastore:c.datastore,fFolder:c.folder,fNetmask:c.netmask,fGateway:c.gateway,fDns:c.dns,fConcurrency:c.concurrency})){
+      if(v!==undefined&&v!=='') { const n=document.getElementById(id); if(n.tagName==='SELECT'&&v){ /* option may not exist yet */ n.dataset.pendingVal=v; } else if(v) n.value=v; }
+    }
+    const b=st.batch||{};
+    if(b.count) document.getElementById('fCount').value=b.count;
+    if(b.naming) document.getElementById('fNaming').value=b.naming;
+    if(b.cpu) document.querySelector('.bCpu').value=b.cpu;
+    if(b.mem) document.querySelector('.bMem').value=b.mem;
+    if(b.disk) document.querySelector('.bDisk').value=b.disk;
+    if(b.guest) document.querySelector('.bGuest').value=b.guest;
+    if(st.entries&&st.entries.length){
+      document.getElementById('vmList').innerHTML='';
+      st.entries.forEach(d=>addVmEntry(d));
+    }
+  }catch(e){}
+}
+function syncModePanels(){
+  const mode=document.querySelector('input[name=vmMode]:checked').value;
+  document.getElementById('listPanel').style.display = mode==='list'?'':'none';
+  document.getElementById('batchPanel').style.display = mode==='batch'?'':'none';
+}
+
+/* ---------- wire up ---------- */
 document.getElementById('btnDiscover').onclick=()=>doDiscover(false);
 document.getElementById('btnDiscoverTmp').onclick=()=>doDiscover(true);
 document.getElementById('btnPlan').onclick=doPlan;
 document.getElementById('btnDeploy').onclick=doDeploy;
-loadCreds();
+document.getElementById('btnAddVm').onclick=()=>{ addVmEntry(); saveState(); };
+document.querySelectorAll('input[name=vmMode]').forEach(r=>r.addEventListener('change',()=>{syncModePanels();saveState();}));
+loadCreds().then(()=>{
+  if(stateApplied && !document.querySelectorAll('#vmList .vmEntry').length) addVmEntry({});
+});
+applySaved();
+if(!stateApplied || !document.querySelectorAll('#vmList .vmEntry').length){
+  if(!document.querySelectorAll('#vmList .vmEntry').length) addVmEntry({});
+}
+document.addEventListener('change', e=>{ if(e.target.id==='credsSelect'||e.target.closest&&e.target.closest('#discoverResult')) saveState(); });
 </script>
 {% endblock %}

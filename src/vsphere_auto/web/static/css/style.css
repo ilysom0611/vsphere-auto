@@ -14,3 +14,23 @@ button{padding:8px 14px;border-radius:8px;border:1px solid var(--border);backgro
 button.primary{background:var(--accent);border-color:var(--accent)}
 .pre{background:#0b1220;border:1px solid var(--border);border-radius:8px;padding:12px;overflow:auto;max-height:400px;white-space:pre-wrap}
 .muted{color:var(--muted)} h1{margin:8px 0} h2{margin:8px 0 12px;font-size:18px}
+
+/* status badges (success/fail/run/warn) */
+.badge{display:inline-block;padding:2px 10px;border-radius:999px;font-size:12px;font-weight:600;border:1px solid transparent;white-space:nowrap}
+.badge.ok{background:#0f2f1c;color:#4ade80;border-color:#166534}
+.badge.err{background:#381414;color:#f87171;border-color:#7f1d1d}
+.badge.warn{background:#332a0e;color:#fbbf24;border-color:#78530b}
+.badge.run{background:#12233f;color:#60a5fa;border-color:#1e40af}
+.msg-ok{color:#4ade80}.msg-err{color:#f87171}
+
+/* per-VM editor entries */
+.vmEntry{border:1px solid var(--border);border-radius:10px;padding:12px;margin:8px 0;background:#141d2e}
+.vmEntryHead{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+.grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
+label.lbl{font-size:12px;color:var(--muted);display:block;margin-bottom:2px}
+
+/* discover summary */
+.chip{display:inline-block;background:#16233a;border:1px solid var(--border);border-radius:8px;padding:3px 10px;margin:2px;font-size:12px}
+.tblmini th,.tblmini td{padding:4px 8px;font-size:13px}
+details.rawjson summary{cursor:pointer;color:var(--muted);font-size:13px;margin-top:8px}
+.modeRadio label{margin-right:16px;cursor:pointer}

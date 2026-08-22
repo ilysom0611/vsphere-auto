@@ -19,7 +19,7 @@ _RFC1123_LABEL = re.compile(r"[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?")
 # defaults for any key they do not set themselves.
 _VM_SPEC_KEYS = (
     "template", "iso", "cpu", "memoryMB", "diskGB", "networks",
-    "folder", "guestId", "provisioning", "resourcePool",
+    "folder", "guestId", "provisioning", "resourcePool", "host",
 )
 
 

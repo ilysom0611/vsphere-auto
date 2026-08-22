@@ -491,12 +491,14 @@ def clone_from_template(
     power_on: bool = True,
     network: str | None = None,
     provisioning: str | None = None,
+    host: str | None = None,
 ) -> Any:
     """Clone VM from template. Returns vCenter Task.
 
     All named placements (datacenter/template/datastore/folder/resource_pool/
-    cluster/network) resolve strictly inside the target datacenter and raise
-    ValueError when missing — silent wrong-place deployment is not acceptable.
+    cluster/network/host) resolve strictly inside the target datacenter and
+    raise ValueError when missing — silent wrong-place deployment is not
+    acceptable.
     """
     from pyVmomi import vim
 
@@ -547,7 +549,22 @@ def clone_from_template(
                                        "resource pool", resource_pool)
 
     # Cluster/host placement
-    if cluster:
+    if host:
+        # Explicit host pin wins over cluster/auto placement.
+        hs_matches = [h for h in _collect_objs(content, host_root, [vim.HostSystem])
+                      if getattr(h, "name", None) == host]
+        if not hs_matches:
+            raise ValueError(f"host {host!r} not found"
+                             + (f" in datacenter {datacenter!r}" if datacenter else ""))
+        pinned = hs_matches[0]
+        if not _host_sees_datastore(pinned, tpl_ds_name):
+            raise ValueError(f"host {host!r} does not have datastore {tpl_ds_name!r} "
+                             f"mounted (template files live there)")
+        relocate.host = pinned
+        if relocate.pool is None:
+            cr = getattr(pinned, "parent", None)  # HostSystem.parent = its ComputeResource
+            relocate.pool = getattr(cr, "resourcePool", None)
+    elif cluster:
         cl_objs = _collect_objs(content, host_root, [vim.ClusterComputeResource])
         cl = _require_first([c for c in cl_objs if getattr(c, "name", None) == cluster], "cluster", cluster)
         chosen = _pick_host(cl, vim, datastore_name=tpl_ds_name)
@@ -701,6 +718,7 @@ def create_vm_from_iso(
     folder_name: str | None = None,
     datacenter: str | None = None,
     customization_spec=None,
+    host_name: str | None = None,
 ) -> Any:
     """Create blank VM (SCSI controller + disk + NIC) and attach ISO.
 
@@ -737,7 +755,19 @@ def create_vm_from_iso(
     esxi_direct = False
     if dc:
         host_root = getattr(dc, "hostFolder", None)
-        clusters = _collect_objs(content, host_root, [vim.ClusterComputeResource])
+        if host_name:
+            # explicit host pin: use it and its compute resource's root pool
+            hs_matches = [h for h in _collect_objs(content, host_root, [vim.HostSystem])
+                          if getattr(h, "name", None) == host_name]
+            if not hs_matches:
+                raise ValueError(f"host {host_name!r} not found"
+                                 + (f" in datacenter {datacenter!r}" if datacenter else ""))
+            host_obj = hs_matches[0]
+            cr = getattr(host_obj, "parent", None)
+            rp = getattr(cr, "resourcePool", None)
+            if rp is None:
+                raise ValueError(f"host {host_name!r} has no usable resource pool")
+        clusters = [] if host_name else _collect_objs(content, host_root, [vim.ClusterComputeResource])
         if clusters:
             # prefer a cluster that yields an eligible host / usable pool
             for cl in clusters:

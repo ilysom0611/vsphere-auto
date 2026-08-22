@@ -3,13 +3,13 @@
 {% block content %}
 <h1>Tasks</h1>
 <div class="row">
-  <button id="btnRefresh">Refresh</button>
+  <button id="btnRefresh">刷新</button>
   <span id="status" class="muted"></span>
 </div>
-<h2>Batches</h2>
-<table id="batchTable" class="table"><thead><tr><th>ID</th><th>Status</th><th>Created</th><th>Actions</th></tr></thead><tbody></tbody></table>
-<h2>Details</h2>
-<table id="taskTable" class="table"><thead><tr><th>ID</th><th>VM</th><th>Status</th><th>Updated</th></tr></thead><tbody></tbody></table>
+<h2>批次</h2>
+<table id="batchTable" class="table"><thead><tr><th>ID</th><th>状态</th><th>创建时间</th><th>操作</th></tr></thead><tbody></tbody></table>
+<h2>详情</h2>
+<table id="taskTable" class="table"><thead><tr><th>ID</th><th>VM</th><th>状态</th><th>结果 / 错误信息</th><th>更新时间</th></tr></thead><tbody></tbody></table>
 {% endblock %}
 {% block scripts %}
 <script>
@@ -20,17 +20,25 @@ function td(text){
   c.textContent=(text===undefined||text===null)?'':String(text);
   return c;
 }
+const BATCH_BADGE={success:['ok','成功'],failed:['err','失败'],partial:['warn','部分成功'],interrupted:['warn','已中断'],running:['run','运行中'],pending:['run','等待中']};
+function statusBadge(status){
+  const [cls,label]=BATCH_BADGE[status]||['run',status||'未知'];
+  const b=document.createElement('span');
+  b.className='badge '+cls;
+  b.textContent=label;
+  return b;
+}
 async function loadBatches(){
   const r=await fetch('/api/batches'); const list=await r.json();
   const tb=document.querySelector('#batchTable tbody'); tb.innerHTML='';
   list.forEach(b=>{
     const tr=document.createElement('tr');
     tr.appendChild(td(b.id));
-    tr.appendChild(td(b.status));
+    const st=document.createElement('td'); st.appendChild(statusBadge(b.status)); tr.appendChild(st);
     tr.appendChild(td(b.created_at||''));
     const actions=document.createElement('td');
     const btn=document.createElement('button');
-    btn.textContent='View';
+    btn.textContent='查看';
     btn.dataset.id=b.id;
     actions.appendChild(btn);
     tr.appendChild(actions);
@@ -45,10 +53,37 @@ document.querySelector('#batchTable tbody').addEventListener('click', (ev)=>{
 function fillTaskRows(list){
   const tb=document.querySelector('#taskTable tbody'); tb.innerHTML='';
   list.forEach(t=>{
+    let result={};
+    try{ result=JSON.parse(t.result_json||'{}'); }catch(e){}
     const tr=document.createElement('tr');
     tr.appendChild(td(t.id));
     tr.appendChild(td(t.vm_name));
-    tr.appendChild(td(t.status));
+    const st=document.createElement('td'); st.appendChild(statusBadge(t.status)); tr.appendChild(st);
+
+    // Result / error cell: moid or skipped for success, full error text for failures
+    const resTd=document.createElement('td');
+    if(result.error){
+      const det=document.createElement('details');
+      det.className='rawjson';
+      const sum=document.createElement('summary');
+      sum.style.color='#f87171';
+      sum.textContent=String(result.error).slice(0,120)+(String(result.error).length>120?'…':'');
+      det.appendChild(sum);
+      // Full result payload — everything the server recorded for this task
+      const pre=document.createElement('pre');
+      pre.className='pre';
+      pre.textContent=JSON.stringify(result,null,2)||'(无详情)';
+      det.appendChild(pre);
+      resTd.appendChild(det);
+    } else if(result.skipped){
+      resTd.appendChild(document.createTextNode('已存在，跳过'));
+      if(result.moid) resTd.appendChild(document.createTextNode(' · moid: '+result.moid));
+    } else if(result.moid){
+      resTd.appendChild(document.createTextNode('moid: '+result.moid));
+    } else {
+      resTd.appendChild(document.createTextNode('—'));
+    }
+    tr.appendChild(resTd);
     tr.appendChild(td(t.updated_at||''));
     tb.appendChild(tr);
   });
@@ -57,7 +92,7 @@ async function loadTasks(batchId){
   const r=await fetch('/api/tasks?batch_id='+encodeURIComponent(batchId));
   const list=await r.json();
   fillTaskRows(list);
-  document.getElementById('status').textContent='Batch '+batchId+' — '+list.length+' item(s)';
+  document.getElementById('status').textContent='批次 '+batchId+' — 共 '+list.length+' 个任务';
 }
 async function loadAllTasks(){
   const r=await fetch('/api/tasks'); const list=await r.json();

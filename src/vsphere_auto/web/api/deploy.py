@@ -304,6 +304,7 @@ def _deploy_after_expand(cfg: dict[str, Any], vms: list, consumed: list[str]):
                     customization_spec=custom,
                     network=network_name,
                     provisioning=vm.get("provisioning"),
+                    host=vm.get("host"),
                 )
                 from ...vsphere.tasks import wait_for_task
 
@@ -321,7 +322,7 @@ def _deploy_after_expand(cfg: dict[str, Any], vms: list, consumed: list[str]):
                         pass
                 if not ds_name:
                     return {"ok": False, "error": "Datastore required for ISO deploy"}
-                vm_obj = create_vm_from_iso(si, name, ds_name, iso_path, guest_id, cpu, mem, int(disk or 40), network_name, folder, datacenter, customization_spec=custom)
+                vm_obj = create_vm_from_iso(si, name, ds_name, iso_path, guest_id, cpu, mem, int(disk or 40), network_name, folder, datacenter, customization_spec=custom, host_name=vm.get("host"))
                 return {"ok": True, "moid": getattr(vm_obj, "_moId", "") if vm_obj else ""}
             else:
                 return {"ok": False, "error": "Either template or iso required"}
