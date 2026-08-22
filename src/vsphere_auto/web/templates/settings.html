@@ -1,27 +1,28 @@
 {% extends "base.html" %}
 {% block title %}Settings / Credentials - vSphere Auto{% endblock %}
 {% block content %}
-<h1>设置 / 凭据</h1>
-<p class="muted">保存 vCenter / ESXi 端点与账号。密码经 Fernet 加密后写入 <code>state/creds.db</code>，可随时更新；部署时按名称引用。</p>
+<h1 data-i18n="set.h1">设置 / 凭据</h1>
+<p class="muted" data-i18n="set.intro">保存 vCenter / ESXi 端点与账号。密码经 Fernet 加密后写入 <code>state/creds.db</code>，可随时更新；部署时按名称引用。</p>
 
 <section class="card">
-  <h2>已保存的凭据</h2>
-  <table id="credsTable" class="table"><thead><tr><th>ID</th><th>名称</th><th>主机</th><th>用户</th><th>类型</th><th>更新时间</th><th>操作</th></tr></thead><tbody></tbody></table>
+  <h2 data-i18n="set.saved.list">已保存的凭据</h2>
+  <table id="credsTable" class="table"><thead><tr><th>ID</th><th data-i18n="set.col.name">名称</th><th data-i18n="set.col.host">主机</th><th data-i18n="set.col.user">用户</th><th data-i18n="set.col.type">类型</th><th data-i18n="set.col.updated">更新时间</th><th data-i18n="set.col.actions">操作</th></tr></thead><tbody></tbody></table>
 </section>
 
 <section class="card">
-  <h2 id="formTitle">添加凭据</h2>
+  <h2 id="formTitle" data-i18n="set.add">添加凭据</h2>
   <div class="grid2">
-    <label>名称 <input id="fName" placeholder="prod-vc"></label>
-    <label>主机 <input id="fHost" placeholder="10.0.0.10"></label>
-    <label>端口 <input id="fPort" value="443"></label>
-    <label>类型 <select id="fType"><option value="vcenter">vcenter</option><option value="esxi">esxi</option></select></label>
-    <label>用户名 <input id="fUser" placeholder="administrator@vsphere.local"></label>
-    <label>密码 <input id="fPass" type="password" placeholder="编辑时留空表示不修改"></label>
+    <label><span data-i18n="set.name">名称</span> <input id="fName"></label>
+    <label><span data-i18n="set.host">主机</span> <input id="fHost"></label>
+    <label><span data-i18n="set.port">端口</span> <input id="fPort" value="443"></label>
+    <label><span data-i18n="set.type">类型</span>
+      <select id="fType"><option value="vcenter">vcenter</option><option value="esxi">esxi</option></select></label>
+    <label><span data-i18n="set.user">用户名</span> <input id="fUser"></label>
+    <label><span data-i18n="set.pass">密码</span> <input id="fPass" type="password"></label>
   </div>
   <div class="row">
-    <button id="btnSave">保存</button>
-    <button id="btnCancel" style="display:none">取消</button>
+    <button id="btnSave" data-i18n="set.save">保存</button>
+    <button id="btnCancel" style="display:none" data-i18n="set.cancel">取消</button>
     <span id="formMsg" class="muted"></span>
   </div>
 </section>
@@ -36,12 +37,18 @@ function td(text){
   c.textContent=(text===undefined||text===null)?'':String(text);
   return c;
 }
-function actionBtn(label, credId, handler){
-  const b=document.createElement('button');
-  b.textContent=label;
-  b.dataset.id=credId;
-  b.dataset.action=handler;
+function badge(kind, text){
+  const b=document.createElement('span');
+  b.className='badge '+kind;
+  b.textContent=text;
   return b;
+}
+function applyPlaceholders(){
+  // placeholders come from the i18n dictionary
+  document.getElementById('fName').placeholder=t('set.name.ph');
+  document.getElementById('fHost').placeholder=t('set.host.ph');
+  document.getElementById('fUser').placeholder=t('set.user.ph');
+  document.getElementById('fPass').placeholder=t('set.pass.ph');
 }
 async function load(){
   const r=await fetch('/api/creds'); const list=await r.json();
@@ -55,11 +62,20 @@ async function load(){
     tr.appendChild(td(c.type));
     tr.appendChild(td(c.updated_at||''));
     const actions=document.createElement('td');
-    actions.appendChild(actionBtn('Test', c.id, 'test'));
+    const testBtn=document.createElement('button');
+    testBtn.textContent=t('set.testbtn');
+    testBtn.dataset.id=c.id; testBtn.dataset.action='test';
+    actions.appendChild(testBtn);
     actions.appendChild(document.createTextNode(' '));
-    actions.appendChild(actionBtn('Edit', c.id, 'edit'));
+    const editBtn=document.createElement('button');
+    editBtn.textContent=t('set.editbtn');
+    editBtn.dataset.id=c.id; editBtn.dataset.action='edit';
+    actions.appendChild(editBtn);
     actions.appendChild(document.createTextNode(' '));
-    actions.appendChild(actionBtn('Delete', c.id, 'delete'));
+    const delBtn=document.createElement('button');
+    delBtn.textContent=t('set.delbtn');
+    delBtn.dataset.id=c.id; delBtn.dataset.action='delete';
+    actions.appendChild(delBtn);
     tr.appendChild(actions);
     tb.appendChild(tr);
   });
@@ -77,9 +93,9 @@ function tbHandler(){
 }
 async function editCred(id){
   const r=await fetch('/api/creds/'+encodeURIComponent(id)); const c=await r.json();
-  if(!r.ok||c.error){ alert('加载凭据 #'+id+' 失败'); return; }
+  if(!r.ok||c.error){ alert(t('set.loadfail',{id:id})); return; }
   editingId=id;
-  document.getElementById('formTitle').textContent='编辑凭据 #'+id;
+  document.getElementById('formTitle').textContent=t('set.edit',{id:id});
   document.getElementById('fName').value=c.name;
   document.getElementById('fHost').value=c.host;
   document.getElementById('fPort').value=c.port;
@@ -90,14 +106,13 @@ async function editCred(id){
 }
 document.getElementById('btnCancel').onclick=()=>{
   editingId=null;
-  document.getElementById('formTitle').textContent='添加凭据';
+  document.getElementById('formTitle').textContent=t('set.add');
   document.getElementById('fName').value=''; document.getElementById('fHost').value=''; document.getElementById('fPort').value='443'; document.getElementById('fUser').value=''; document.getElementById('fPass').value='';
   document.getElementById('btnCancel').style.display='none';
-  document.getElementById('formMsg').textContent='';
-  document.getElementById('formMsg').className='muted';
+  const msg=document.getElementById('formMsg'); msg.textContent=''; msg.className='muted';
 };
 async function testCred(id){
-  // Inline colored result next to the tested row's button (replaces alert()).
+  // Inline colored result next to the tested row's button.
   document.querySelectorAll('.testResult').forEach(n=>n.remove());
   const btn=document.querySelector(`button[data-action="test"][data-id="${id}"]`);
   if(btn) btn.disabled=true;
@@ -106,16 +121,16 @@ async function testCred(id){
     const span=document.createElement('span');
     span.className='testResult';
     if(r.ok && j.ok){
-      span.appendChild(badge('ok','连接成功'));
+      span.appendChild(badge('ok',t('set.test.ok')));
       const s=j.summary||{};
       const bits=[];
       if(j.version) bits.push('vSphere '+j.version);
-      if(s.datacenters!==undefined) bits.push('数据中心 '+s.datacenters);
-      if(s.hosts!==undefined) bits.push('主机 '+s.hosts);
+      if(s.datacenters!==undefined) bits.push(t('set.dc')+' '+s.datacenters);
+      if(s.hosts!==undefined) bits.push(t('set.hosts')+' '+s.hosts);
       if(bits.length) span.appendChild(document.createTextNode(' '+bits.join(' · ')));
       if(j.warning){ span.appendChild(document.createTextNode(' ')); span.appendChild(badge('warn',j.warning)); }
     } else {
-      span.appendChild(badge('err','连接失败'));
+      span.appendChild(badge('err',t('set.test.fail')));
       if(j.error) span.appendChild(document.createTextNode(' '+j.error));
     }
     if(btn&&btn.parentElement) btn.parentElement.appendChild(span);
@@ -123,14 +138,8 @@ async function testCred(id){
     if(btn) btn.disabled=false;
   }
 }
-function badge(kind, text){
-  const b=document.createElement('span');
-  b.className='badge '+kind;
-  b.textContent=text;
-  return b;
-}
 async function delCred(id){
-  if(!confirm('确认删除凭据 #'+id+' ?')) return;
+  if(!confirm(t('set.delconfirm',{id:id}))) return;
   await fetch(`/api/creds/${id}`,{method:'DELETE'});
   load();
 }
@@ -145,11 +154,11 @@ document.getElementById('btnSave').onclick=async()=>{
   const r=await fetch(url,{method,headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   const j=await r.json();
   const msg=document.getElementById('formMsg');
-  msg.textContent='';
   msg.className=r.ok?'msg-ok':'msg-err';
-  msg.textContent=r.ok?'已保存':'保存失败: '+(j.error||r.status);
-  if(r.ok){ editingId=null; document.getElementById('formTitle').textContent='添加凭据'; document.getElementById('btnCancel').style.display='none'; document.getElementById('fPass').value=''; load(); }
+  msg.textContent=r.ok?t('set.saved.msg'):(t('set.savefail')+(j.error||r.status));
+  if(r.ok){ editingId=null; document.getElementById('formTitle').textContent=t('set.add'); document.getElementById('btnCancel').style.display='none'; document.getElementById('fPass').value=''; load(); }
 };
 load();
+applyPlaceholders();
 </script>
 {% endblock %}

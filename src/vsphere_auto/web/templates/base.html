@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -37,12 +37,232 @@
   };
 })();
 </script>
+<script>
+// ---- i18n core: zh/en dictionaries + t() + applyI18n() --------------------
+// Static markup marks translatable text with data-i18n="key" (textContent)
+// and data-i18n-ph="key" (placeholder). Dynamic strings call t(key).
+window.I18N = {
+  zh: {
+    "nav.deploy": "部署", "nav.tasks": "任务", "nav.settings": "设置 / 凭据",
+    "lang.toggle": "EN",
+    "common.refresh": "刷新",
+
+    "idx.h1": "vSphere 批量部署",
+    "idx.s1": "1. 选择 vCenter / ESXi 并发现资源",
+    "idx.cred.opt": "-- 选择已保存的凭据 --",
+    "idx.discover": "发现资源",
+    "idx.tmp.summary": "或使用临时连接（不保存）",
+    "idx.tmp.host.ph": "主机 (10.0.0.10)", "idx.tmp.user.ph": "用户名", "idx.tmp.pass.ph": "密码",
+    "idx.discover.tmp": "发现（临时连接）",
+    "idx.s2": "2. 部署目标（可选，默认自动）",
+    "idx.ds.label": "数据存储（留空 = 自动选剩余空间最大）",
+    "idx.ds.auto": "auto（自动选择）",
+    "idx.folder.label": "文件夹（如 workloads/demo）",
+    "idx.s3": "3. VM 定义方式",
+    "idx.mode.list": " 逐台定义（每台可不同规格）",
+    "idx.mode.batch": " 批量生成（相同规格 + 命名模板）",
+    "idx.addvm": "+ 添加 VM", "common.delete": "删除",
+    "idx.tpl.opt": "-- 自动 / 选择 --", "idx.iso.opt": "-- 无 --",
+    "idx.tpl.opt2": "模板", "idx.iso.opt2": "ISO（可选）",
+    "idx.cpu": "CPU", "idx.mem": "内存 MB", "idx.disk": "磁盘 GB（只扩不缩）",
+    "idx.network": "网络", "idx.ipmode": "IP 分配",
+    "idx.ip.dhcp": "dhcp", "idx.ip.auto": "auto（IP 池）", "idx.ip.static": "静态",
+    "idx.guest": "Guest ID", "idx.count": "数量",
+    "idx.naming": "命名模板（须含 {index}）",
+    "idx.e.name": "VM 名称 / 主机名", "idx.e.name.ph": "web-01",
+    "idx.e.ip": "静态 IP（选“静态”时填写）", "idx.e.ip.ph": "10.0.0.11",
+    "idx.e.host": "宿主机（可选）", "idx.e.host.ph": "留空 = 自动放置",
+    "idx.e.rp": "资源池（可选）", "idx.e.rp.ph": "留空 = 默认",
+    "idx.s4": "4. 网络参数与执行",
+    "idx.netmask": "子网掩码（静态 IP 时必填）", "idx.netmask.ph": "255.255.255.0",
+    "idx.gateway": "网关", "idx.gateway.ph": "10.0.0.1",
+    "idx.dns": "DNS（逗号分隔）", "idx.dns.ph": "10.0.0.2,8.8.8.8",
+    "idx.concurrency": "并发",
+    "idx.adv.summary": "高级：粘贴 JSON 配置（覆盖表单）",
+    "idx.adv.ph": '{"vms": [...], "vcenter": {...}}',
+    "idx.plan": "预览计划", "idx.deploy": "部署",
+    "d.discovering": "正在发现资源...",
+    "d.selectcred": "请选择凭据或使用临时连接。",
+    "d.ok": "成功", "d.fail": "失败", "d.partial": "部分成功",
+    "d.netfail": "网络错误",
+    "d.tip": "提示: 请确认 vSphere 主机 443 端口可达且账号密码正确。",
+    "d.ds": "数据存储", "d.hosts": "主机", "d.networks": "网络", "d.pools": "资源池",
+    "d.none": "无", "d.name": "名称", "d.free": "剩余", "d.cap": "容量", "d.type": "类型", "d.state": "状态",
+    "d.accessible": "正常", "d.inaccessible": "不可访问",
+    "d.cluster": "集群", "d.standalone": "独立主机", "d.hostcount": "主机数", "d.members": "成员",
+    "d.templates": "模板列表", "d.rawjson": "原始 JSON",
+    "p.computing": "计算中...", "p.ok": "计划 OK — 共 {n} 台",
+    "dep.submitted": "已提交", "dep.jump": " 批次 {id}（{n} 台）— 正在跳转到任务页...",
+    "dep.failed": "提交失败",
+
+    "task.h1": "任务", "task.batches": "批次", "task.details": "详情",
+    "task.col.id": "ID", "task.col.status": "状态", "task.col.created": "创建时间",
+    "task.col.actions": "操作", "task.col.vm": "VM", "task.col.result": "结果 / 错误信息",
+    "task.col.updated": "更新时间",
+    "task.view": "查看",
+    "task.statusmsg": "批次 {id} — 共 {n} 个任务",
+    "task.skipped": "已存在，跳过",
+    "task.st.success": "成功", "task.st.failed": "失败", "task.st.partial": "部分成功",
+    "task.st.interrupted": "已中断", "task.st.running": "运行中", "task.st.pending": "等待中",
+    "task.st.unknown": "未知",
+
+    "set.h1": "设置 / 凭据",
+    "set.intro": "保存 vCenter / ESXi 端点与账号。密码经 Fernet 加密后写入 state/creds.db，可随时更新；部署时按名称引用。",
+    "set.saved.list": "已保存的凭据",
+    "set.col.name": "名称", "set.col.host": "主机", "set.col.user": "用户",
+    "set.col.type": "类型", "set.col.updated": "更新时间", "set.col.actions": "操作",
+    "set.add": "添加凭据", "set.edit": "编辑凭据 #{id}",
+    "set.name": "名称", "set.name.ph": "prod-vc",
+    "set.host": "主机", "set.host.ph": "10.0.0.10",
+    "set.port": "端口",
+    "set.type": "类型",
+    "set.user": "用户名", "set.user.ph": "administrator@vsphere.local",
+    "set.pass": "密码", "set.pass.ph": "编辑时留空表示不修改",
+    "set.save": "保存", "set.cancel": "取消",
+    "set.testbtn": "测试", "set.editbtn": "编辑", "set.delbtn": "删除",
+    "set.saved.msg": "已保存", "set.savefail": "保存失败: ",
+    "set.loadfail": "加载凭据 #{id} 失败",
+    "set.delconfirm": "确认删除凭据 #{id} ?",
+    "set.test.ok": "连接成功", "set.test.fail": "连接失败",
+    "set.dc": "数据中心", "set.hosts": "主机",
+  },
+  en: {
+    "nav.deploy": "Deploy", "nav.tasks": "Tasks", "nav.settings": "Settings / Credentials",
+    "lang.toggle": "中文",
+    "common.refresh": "Refresh",
+
+    "idx.h1": "vSphere Batch Deploy",
+    "idx.s1": "1. Select vCenter / ESXi & discover resources",
+    "idx.cred.opt": "-- Select saved credential --",
+    "idx.discover": "Discover Resources",
+    "idx.tmp.summary": "Or use a temporary connection (not saved)",
+    "idx.tmp.host.ph": "host (10.0.0.10)", "idx.tmp.user.ph": "user", "idx.tmp.pass.ph": "password",
+    "idx.discover.tmp": "Discover (temporary)",
+    "idx.s2": "2. Placement (optional, automatic by default)",
+    "idx.ds.label": "Datastore (blank = auto-pick largest free space)",
+    "idx.ds.auto": "auto (automatic)",
+    "idx.folder.label": "Folder (e.g. workloads/demo)",
+    "idx.s3": "3. VM definition mode",
+    "idx.mode.list": " Per-VM (each with its own spec)",
+    "idx.mode.batch": " Batch generate (same spec + naming template)",
+    "idx.addvm": "+ Add VM", "common.delete": "Delete",
+    "idx.tpl.opt": "-- auto / select --", "idx.iso.opt": "-- none --",
+    "idx.tpl.opt2": "Template", "idx.iso.opt2": "ISO (optional)",
+    "idx.cpu": "CPU", "idx.mem": "Memory MB", "idx.disk": "Disk GB (grow only)",
+    "idx.network": "Network", "idx.ipmode": "IP assignment",
+    "idx.ip.dhcp": "dhcp", "idx.ip.auto": "auto (IP pool)", "idx.ip.static": "static",
+    "idx.guest": "Guest ID", "idx.count": "Count",
+    "idx.naming": "Naming template (must contain {index})",
+    "idx.e.name": "VM name / hostname", "idx.e.name.ph": "web-01",
+    "idx.e.ip": "Static IP (fill when \"static\")", "idx.e.ip.ph": "10.0.0.11",
+    "idx.e.host": "Host (optional)", "idx.e.host.ph": "blank = auto placement",
+    "idx.e.rp": "Resource pool (optional)", "idx.e.rp.ph": "blank = default",
+    "idx.s4": "4. Network parameters & execution",
+    "idx.netmask": "Netmask (required for static IP)", "idx.netmask.ph": "255.255.255.0",
+    "idx.gateway": "Gateway", "idx.gateway.ph": "10.0.0.1",
+    "idx.dns": "DNS (comma separated)", "idx.dns.ph": "10.0.0.2,8.8.8.8",
+    "idx.concurrency": "Concurrency",
+    "idx.adv.summary": "Advanced: paste JSON config (overrides form)",
+    "idx.adv.ph": '{"vms": [...], "vcenter": {...}}',
+    "idx.plan": "Preview Plan", "idx.deploy": "Deploy",
+    "d.discovering": "Discovering...",
+    "d.selectcred": "Please select a credential or use a temporary connection.",
+    "d.ok": "OK", "d.fail": "Failed", "d.partial": "Partial",
+    "d.netfail": "Network error",
+    "d.tip": "Tip: check the vSphere host is reachable on 443 and credentials are correct.",
+    "d.ds": "Datastores", "d.hosts": "Hosts", "d.networks": "Networks", "d.pools": "Resource pools",
+    "d.none": "none", "d.name": "Name", "d.free": "Free", "d.cap": "Capacity", "d.type": "Type", "d.state": "State",
+    "d.accessible": "accessible", "d.inaccessible": "inaccessible",
+    "d.cluster": "Cluster", "d.standalone": "Standalone", "d.hostcount": "Hosts", "d.members": "Members",
+    "d.templates": "Templates", "d.rawjson": "Raw JSON",
+    "p.computing": "Computing...", "p.ok": "Plan OK — {n} VM(s)",
+    "dep.submitted": "Submitted", "dep.jump": " Batch {id} ({n} VM(s)) — redirecting to tasks...",
+    "dep.failed": "Submit failed",
+
+    "task.h1": "Tasks", "task.batches": "Batches", "task.details": "Details",
+    "task.col.id": "ID", "task.col.status": "Status", "task.col.created": "Created",
+    "task.col.actions": "Actions", "task.col.vm": "VM", "task.col.result": "Result / Error",
+    "task.col.updated": "Updated",
+    "task.view": "View",
+    "task.statusmsg": "Batch {id} — {n} task(s)",
+    "task.skipped": "Already exists, skipped",
+    "task.st.success": "Success", "task.st.failed": "Failed", "task.st.partial": "Partial",
+    "task.st.interrupted": "Interrupted", "task.st.running": "Running", "task.st.pending": "Pending",
+    "task.st.unknown": "Unknown",
+
+    "set.h1": "Settings / Credentials",
+    "set.intro": "Save vCenter / ESXi endpoints and accounts. Passwords are Fernet-encrypted into state/creds.db and can be updated anytime; deployments reference them by name.",
+    "set.saved.list": "Saved Credentials",
+    "set.col.name": "Name", "set.col.host": "Host", "set.col.user": "User",
+    "set.col.type": "Type", "set.col.updated": "Updated", "set.col.actions": "Actions",
+    "set.add": "Add Credential", "set.edit": "Edit Credential #{id}",
+    "set.name": "Name", "set.name.ph": "prod-vc",
+    "set.host": "Host", "set.host.ph": "10.0.0.10",
+    "set.port": "Port",
+    "set.type": "Type",
+    "set.user": "Username", "set.user.ph": "administrator@vsphere.local",
+    "set.pass": "Password", "set.pass.ph": "Leave blank to keep unchanged when editing",
+    "set.save": "Save", "set.cancel": "Cancel",
+    "set.testbtn": "Test", "set.editbtn": "Edit", "set.delbtn": "Delete",
+    "set.saved.msg": "Saved", "set.savefail": "Save failed: ",
+    "set.loadfail": "Failed to load credential #{id}",
+    "set.delconfirm": "Delete credential #{id}?",
+    "set.test.ok": "Connected", "set.test.fail": "Connection failed",
+    "set.dc": "DCs", "set.hosts": "hosts",
+  }
+};
+(function () {
+  var LANG_KEY = "vsphereLang";
+  window.i18nLang = localStorage.getItem(LANG_KEY) ||
+                    ((navigator.language || "").indexOf("en") === 0 ? "en" : "zh");
+  window.t = function (key, params) {
+    var d = window.I18N[window.i18nLang] || {};
+    var s = d[key] !== undefined ? d[key] : (window.I18N.zh[key] !== undefined ? window.I18N.zh[key] : key);
+    if (params) {
+      Object.keys(params).forEach(function (k) {
+        s = s.split("{" + k + "}").join(String(params[k]));
+      });
+    }
+    return s;
+  };
+  window.applyI18n = function () {
+    document.documentElement.lang = window.i18nLang;
+    document.querySelectorAll("[data-i18n]").forEach(function (n) {
+      n.textContent = window.t(n.getAttribute("data-i18n"));
+    });
+    document.querySelectorAll("[data-i18n-ph]").forEach(function (n) {
+      n.setAttribute("placeholder", window.t(n.getAttribute("data-i18n-ph")));
+    });
+    document.querySelectorAll("[data-i18n-title]").forEach(function (n) {
+      n.setAttribute("title", window.t(n.getAttribute("data-i18n-title")));
+    });
+    var btn = document.getElementById("langToggle");
+    if (btn) btn.textContent = window.t("lang.toggle");
+  };
+  // Toggle button lives in the nav; switching reloads so all dynamically
+  // rendered content regenerates in the new language.
+  document.addEventListener("DOMContentLoaded", function () {
+    var btn = document.getElementById("langToggle");
+    if (!btn) return;
+    btn.onclick = function () {
+      window.i18nLang = window.i18nLang === "zh" ? "en" : "zh";
+      try { localStorage.setItem(LANG_KEY, window.i18nLang); } catch (e) {}
+      location.reload();
+    };
+    window.applyI18n();
+    // pages register extra dynamic-string refresh here if ever needed
+    if (typeof window.onI18nReady === "function") window.onI18nReady();
+  });
+})();
+</script>
 </head>
 <body>
 <nav class="nav">
-  <a href="/">部署</a>
-  <a href="/tasks">任务</a>
-  <a href="/settings">设置 / 凭据</a>
+  <a href="/" data-i18n="nav.deploy">部署</a>
+  <a href="/tasks" data-i18n="nav.tasks">任务</a>
+  <a href="/settings" data-i18n="nav.settings">设置 / 凭据</a>
+  <span style="flex:1"></span>
+  <button id="langToggle" style="width:auto"></button>
 </nav>
 <main class="container">
 {% block content %}{% endblock %}

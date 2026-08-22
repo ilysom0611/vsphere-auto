@@ -1,31 +1,31 @@
 {% extends "base.html" %}
 {% block title %}Tasks - vSphere Auto{% endblock %}
 {% block content %}
-<h1>Tasks</h1>
+<h1 data-i18n="task.h1">任务</h1>
 <div class="row">
-  <button id="btnRefresh">刷新</button>
+  <button id="btnRefresh" data-i18n="common.refresh">刷新</button>
   <span id="status" class="muted"></span>
 </div>
-<h2>批次</h2>
-<table id="batchTable" class="table"><thead><tr><th>ID</th><th>状态</th><th>创建时间</th><th>操作</th></tr></thead><tbody></tbody></table>
-<h2>详情</h2>
-<table id="taskTable" class="table"><thead><tr><th>ID</th><th>VM</th><th>状态</th><th>结果 / 错误信息</th><th>更新时间</th></tr></thead><tbody></tbody></table>
+<h2 data-i18n="task.batches">批次</h2>
+<table id="batchTable" class="table"><thead><tr><th data-i18n="task.col.id">ID</th><th data-i18n="task.col.status">状态</th><th data-i18n="task.col.created">创建时间</th><th data-i18n="task.col.actions">操作</th></tr></thead><tbody></tbody></table>
+<h2 data-i18n="task.details">详情</h2>
+<table id="taskTable" class="table"><thead><tr><th data-i18n="task.col.id">ID</th><th data-i18n="task.col.vm">VM</th><th data-i18n="task.col.status">状态</th><th data-i18n="task.col.result">结果 / 错误信息</th><th data-i18n="task.col.updated">更新时间</th></tr></thead><tbody></tbody></table>
 {% endblock %}
 {% block scripts %}
 <script>
 // All server-supplied values are rendered via textContent (never innerHTML
 // interpolation) so batch ids / VM names cannot inject markup.
+// Status labels come from the i18n dictionary (t('task.st.*')).
 function td(text){
   const c=document.createElement('td');
   c.textContent=(text===undefined||text===null)?'':String(text);
   return c;
 }
-const BATCH_BADGE={success:['ok','成功'],failed:['err','失败'],partial:['warn','部分成功'],interrupted:['warn','已中断'],running:['run','运行中'],pending:['run','等待中']};
 function statusBadge(status){
-  const [cls,label]=BATCH_BADGE[status]||['run',status||'未知'];
   const b=document.createElement('span');
-  b.className='badge '+cls;
-  b.textContent=label;
+  const kind={success:'ok',failed:'err',partial:'warn',interrupted:'warn',running:'run',pending:'run'}[status]||'run';
+  b.className='badge '+kind;
+  b.textContent=t('task.st.'+(status||'unknown'));
   return b;
 }
 async function loadBatches(){
@@ -38,7 +38,7 @@ async function loadBatches(){
     tr.appendChild(td(b.created_at||''));
     const actions=document.createElement('td');
     const btn=document.createElement('button');
-    btn.textContent='查看';
+    btn.textContent=t('task.view');
     btn.dataset.id=b.id;
     actions.appendChild(btn);
     tr.appendChild(actions);
@@ -69,14 +69,13 @@ function fillTaskRows(list){
       sum.style.color='#f87171';
       sum.textContent=String(result.error).slice(0,120)+(String(result.error).length>120?'…':'');
       det.appendChild(sum);
-      // Full result payload — everything the server recorded for this task
       const pre=document.createElement('pre');
       pre.className='pre';
-      pre.textContent=JSON.stringify(result,null,2)||'(无详情)';
+      pre.textContent=JSON.stringify(result,null,2)||'(no detail)';
       det.appendChild(pre);
       resTd.appendChild(det);
     } else if(result.skipped){
-      resTd.appendChild(document.createTextNode('已存在，跳过'));
+      resTd.appendChild(document.createTextNode(t('task.skipped')));
       if(result.moid) resTd.appendChild(document.createTextNode(' · moid: '+result.moid));
     } else if(result.moid){
       resTd.appendChild(document.createTextNode('moid: '+result.moid));
@@ -92,7 +91,7 @@ async function loadTasks(batchId){
   const r=await fetch('/api/tasks?batch_id='+encodeURIComponent(batchId));
   const list=await r.json();
   fillTaskRows(list);
-  document.getElementById('status').textContent='批次 '+batchId+' — 共 '+list.length+' 个任务';
+  document.getElementById('status').textContent=t('task.statusmsg',{id:batchId,n:list.length});
 }
 async function loadAllTasks(){
   const r=await fetch('/api/tasks'); const list=await r.json();
