@@ -9,7 +9,7 @@
 <h2 data-i18n="task.batches">批次</h2>
 <table id="batchTable" class="table"><thead><tr><th data-i18n="task.col.id">ID</th><th data-i18n="task.col.status">状态</th><th data-i18n="task.col.created">创建时间</th><th data-i18n="task.col.actions">操作</th></tr></thead><tbody></tbody></table>
 <h2 data-i18n="task.details">详情</h2>
-<table id="taskTable" class="table"><thead><tr><th data-i18n="task.col.id">ID</th><th data-i18n="task.col.vm">VM</th><th data-i18n="task.col.status">状态</th><th data-i18n="task.col.result">结果 / 错误信息</th><th data-i18n="task.col.updated">更新时间</th></tr></thead><tbody></tbody></table>
+<table id="taskTable" class="table"><thead><tr><th data-i18n="task.col.id">ID</th><th data-i18n="task.col.vm">VM</th><th data-i18n="task.col.status">状态</th><th data-i18n="task.col.progress">进度 / 当前操作</th><th data-i18n="task.col.result">结果 / 错误信息</th><th data-i18n="task.col.updated">更新时间</th></tr></thead><tbody></tbody></table>
 {% endblock %}
 {% block scripts %}
 <script>
@@ -50,6 +50,33 @@ document.querySelector('#batchTable tbody').addEventListener('click', (ev)=>{
   if(!btn) return;
   loadTasks(btn.dataset.id);
 });
+function progressCell(t){
+  const c=document.createElement('td');
+  if(t.status!=='running'&&t.status!=='pending'){ c.appendChild(document.createTextNode('—')); return c; }
+  const live=t.live||{};
+  const step=live.step||'';
+  let txt='';
+  if(step==='clone'){
+    const pct=parseInt(live.detail,10);
+    txt = isNaN(pct) ? t('prog.clone') : t('prog.clone')+' '+pct+'%';
+  } else if(step && window.I18N.zh['prog.'+step]){
+    txt = t('prog.'+step);
+    if(live.detail && step!=='clone') txt += ' '+live.detail;
+  } else if(step){
+    txt = step + (live.detail?' '+live.detail:'');
+  } else {
+    txt = t('prog.wait');
+  }
+  c.appendChild(document.createTextNode(txt));
+  if(t.updated_at){
+    const age=(Date.now()-new Date(t.updated_at.replace(' ','T')))/1000;
+    if(age>180){
+      c.appendChild(document.createElement('br'));
+      c.appendChild(badge('warn', t('prog.stale',{n:Math.round(age/60)})));
+    }
+  }
+  return c;
+}
 function fillTaskRows(list){
   const tb=document.querySelector('#taskTable tbody'); tb.innerHTML='';
   list.forEach(t=>{
@@ -59,37 +86,46 @@ function fillTaskRows(list){
     tr.appendChild(td(t.id));
     tr.appendChild(td(t.vm_name));
     const st=document.createElement('td'); st.appendChild(statusBadge(t.status)); tr.appendChild(st);
+    tr.appendChild(progressCell(t));
 
-    // Result / error cell: moid or skipped for success, actionable hint +
-    // expandable raw error for failures.
+    // Result / error cell: moid or skipped for success; failures ALWAYS show
+    // the raw error text plus a translated "how to fix" hint when classified.
     const resTd=document.createElement('td');
     if(result.error){
       const key=result.errorKey?('err.'+result.errorKey):null;
       // only translate keys that exist in BOTH dictionaries (server may be
       // newer than the cached page)
-      const known=key&&window.I18N.zh[key]&&window.I18N.en[key];
+      const known=key&&window.I18N.zh[key]&&window.I18N.en[key]&&result.errorKey!=='generic';
+      const rawText=String(result.error);
       if(known){
         resTd.appendChild(badge('err', t('err.hint')));
         const msg=document.createElement('div');
         msg.style.marginTop='4px';
         msg.textContent=t(key);
         resTd.appendChild(msg);
-      } else {
-        const line=document.createElement('div');
-        line.style.color='#f87171';
-        line.textContent=String(result.error).slice(0,160)+(String(result.error).length>160?'…':'');
-        resTd.appendChild(line);
       }
+      const line=document.createElement('div');
+      line.style.color='#f87171';
+      line.style.marginTop='4px';
+      line.textContent=(known?t('err.raw')+': ':'')+rawText.slice(0,200)+(rawText.length>200?'…':'');
+      resTd.appendChild(line);
       const det=document.createElement('details');
       det.className='rawjson';
       const sum=document.createElement('summary');
-      sum.textContent=t('err.raw');
+      sum.textContent=t('err.rawjson');
       det.appendChild(sum);
       const pre=document.createElement('pre');
       pre.className='pre';
       pre.textContent=JSON.stringify(result,null,2)||'(no detail)';
       det.appendChild(pre);
       resTd.appendChild(det);
+    } else if(t.status==='failed'){
+      // failed row with no recorded detail (older batch / crash mid-write)
+      resTd.appendChild(badge('err', t('err.hint')));
+      const msg=document.createElement('div');
+      msg.style.marginTop='4px';
+      msg.textContent=t('err.generic');
+      resTd.appendChild(msg);
     } else if(result.skipped){
       resTd.appendChild(document.createTextNode(t('task.skipped')));
       if(result.moid) resTd.appendChild(document.createTextNode(' · moid: '+result.moid));
@@ -114,7 +150,17 @@ async function loadAllTasks(){
   fillTaskRows(list);
 }
 document.getElementById('btnRefresh').onclick=()=>{ loadBatches(); loadAllTasks(); };
+let _lastActive=false;
+async function pollTick(){
+  // While anything is running/pending, refresh everything so progress %,
+  // new rows, and final states appear live; otherwise just batch statuses.
+  const r=await fetch('/api/tasks'); const list=await r.json();
+  const active=(list||[]).some(t=>t.status==='running'||t.status==='pending');
+  fillTaskRows(list);
+  if(active||_lastActive) loadBatches();
+  _lastActive=active;
+}
 loadBatches(); loadAllTasks();
-setInterval(()=>{ loadBatches(); }, 5000);
+setInterval(pollTick, 3000);
 </script>
 {% endblock %}

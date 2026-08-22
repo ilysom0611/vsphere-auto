@@ -230,8 +230,20 @@ function fillSelects(inv){
   if(bn){ const v=bn.value; bn.innerHTML=''; bn.appendChild(el('option','','auto')).value='auto'; nets.forEach(([v2,t2])=>{const oo=el('option','',t2);oo.value=v2;bn.appendChild(oo);}); bn.value=v; }
   const fd=document.getElementById('fDatastore');
   if(fd){ const v=fd.dataset.pendingVal||fd.value; fd.innerHTML=''; const o=el('option','',t('idx.ds.auto')); o.value=''; fd.appendChild(o); dss.forEach(([v2,t2])=>{const oo=el('option','',t2);oo.value=v2;fd.appendChild(oo);}); try{ fd.value=v; }catch(e){} delete fd.dataset.pendingVal; }
-  const fl=document.getElementById('folderList');
-  if(fl){ fl.innerHTML=''; (inv.vmFolders||[]).forEach(p=>{ const o=el('option'); o.value=p; fl.appendChild(o); }); }
+  // hierarchical folder select (tree indented by path depth)
+  const ff=document.getElementById('fFolder');
+  if(ff){
+    const v=ff.dataset.pendingVal||ff.value;
+    ff.innerHTML='';
+    const none=el('option','',t('wiz.folder.none')); none.value=''; ff.appendChild(none);
+    [...(inv.vmFolders||[])].sort((a,b)=>a.localeCompare(b)).forEach(p=>{
+      const segs=p.split('/'); const depth=segs.length-1;
+      const o=el('option','', '  '.repeat(depth)+(depth?'└ ':'')+segs[segs.length-1]);
+      o.value=p; ff.appendChild(o);
+    });
+    try{ ff.value=v; }catch(e){}
+    delete ff.dataset.pendingVal;
+  }
 }
 function fillEntrySelects(entry,tpls,nets){
   const tt=entry.querySelector('.eTemplate');

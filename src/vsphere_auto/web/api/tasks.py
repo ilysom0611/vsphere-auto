@@ -38,7 +38,19 @@ def get_batch_api(bid: str):
 @bp.get("/api/tasks")
 def list_tasks_api():
     batch_id = request.args.get("batch_id") or request.args.get("batchId")
-    return jsonify(list_tasks(batch_id))
+    tasks = list_tasks(batch_id)
+    # Enrich running/pending rows with live "current operation" state from the
+    # in-process registry (same process runs the deploy threads). Finished
+    # rows keep their authoritative DB result only.
+    from .. import progress
+
+    live = progress.snapshot()
+    for t in tasks:
+        if t.get("status") in ("running", "pending"):
+            entry = (live.get(str(t.get("batch_id", ""))) or {}).get(t.get("vm_name", ""))
+            if entry:
+                t["live"] = entry
+    return jsonify(tasks)
 
 
 @bp.get("/api/tasks/<tid>")

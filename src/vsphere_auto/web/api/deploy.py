@@ -232,9 +232,14 @@ def _deploy_after_expand(cfg: dict[str, Any], vms: list, consumed: list[str]):
     from ...vsphere.client import connect, disconnect
 
     def deploy_one(vm: dict):
+        from .. import progress
+
         template = vm.get("template")
         iso = vm.get("iso")
         name = vm.get("name")
+
+        def step(key: str, detail: str = "") -> None:
+            progress.report(batch_id, name, key, detail)
         cpu_raw = vm.get("cpu")
         mem_raw = vm.get("memoryMB")
         cpu = int(cpu_raw) if cpu_raw is not None else 2
@@ -280,6 +285,7 @@ def _deploy_after_expand(cfg: dict[str, Any], vms: list, consumed: list[str]):
 
         si = None
         try:
+            step("conn")
             si = connect(host, port, user, pwd)
             from ...vsphere.deploy import find_vm, clone_from_template, create_vm_from_iso
 
@@ -287,8 +293,11 @@ def _deploy_after_expand(cfg: dict[str, Any], vms: list, consumed: list[str]):
             existing = find_vm(content, name, folder)
             if existing is not None:
                 return {"ok": True, "skipped": True, "moid": getattr(existing, "_moId", "")}
+            if existing is not None:
+                return {"ok": True, "skipped": True, "moid": getattr(existing, "_moId", "")}
 
             if template:
+                step("tpl", template or "")
                 task = clone_from_template(
                     si,
                     template_name=template,
@@ -308,11 +317,20 @@ def _deploy_after_expand(cfg: dict[str, Any], vms: list, consumed: list[str]):
                 )
                 from ...vsphere.tasks import wait_for_task
 
-                res = wait_for_task(task, timeout=1800)
+                def _clone_progress(info):
+                    pct = getattr(info, "progress", None)
+                    desc = getattr(info, "descriptionId", "") or ""
+                    step("clone", f"{pct}" if pct is not None else desc)
+
+                step("clone", "0")
+                res = wait_for_task(task, timeout=1800, on_poll=_clone_progress)
                 if res["state"] == "success":
+                    if custom is not None:
+                        step("custom")
                     return {"ok": True, "moid": str(getattr(res.get("result"), "_moId", "")) if res.get("result") else ""}
                 return {"ok": False, "error": res.get("error") or "Clone failed"}
             elif iso:
+                step("iso", iso or "")
                 ds_name = vc_datastore if vc_datastore and vc_datastore != "auto" else None
                 iso_path = iso
                 if iso_path.startswith("["):
@@ -321,16 +339,18 @@ def _deploy_after_expand(cfg: dict[str, Any], vms: list, consumed: list[str]):
                     except Exception:
                         pass
                 if not ds_name:
-                    return {"ok": False, "error": "Datastore required for ISO deploy"}
+                    return {"ok": False, "error": "Datastore required for ISO deploy", "errorKey": "ds_missing"}
                 vm_obj = create_vm_from_iso(si, name, ds_name, iso_path, guest_id, cpu, mem, int(disk or 40), network_name, folder, datacenter, customization_spec=custom, host_name=vm.get("host"))
                 return {"ok": True, "moid": getattr(vm_obj, "_moId", "") if vm_obj else ""}
             else:
-                return {"ok": False, "error": "Either template or iso required"}
+                return {"ok": False, "error": "Either template or iso required", "errorKey": "tpl_missing"}
         finally:
             if si is not None:
                 disconnect(si)
 
     def _bg():
+        from .. import progress
+
         try:
             run_batch(batch_id, vms, deploy_one, concurrency=concurrency, on_error=on_error)
         except Exception:
@@ -341,6 +361,8 @@ def _deploy_after_expand(cfg: dict[str, Any], vms: list, consumed: list[str]):
                 update_batch_status(batch_id, "failed")
             except Exception:
                 log.exception("batch %s: could not mark failed after background error", batch_id)
+        finally:
+            progress.drop_batch(batch_id)
 
     th = threading.Thread(target=_bg, daemon=True)
     th.start()

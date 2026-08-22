@@ -26,8 +26,12 @@ def _format_task_error(task) -> str | None:
     return " | ".join(parts) if parts else str(err)
 
 
-def wait_for_task(task, timeout: int = 600, interval: float = 1.0) -> dict[str, Any]:
-    """Poll task until done. Returns {state, result, error}."""
+def wait_for_task(task, timeout: int = 600, interval: float = 1.0, on_poll=None) -> dict[str, Any]:
+    """Poll task until done. Returns {state, result, error}.
+
+    on_poll(task.info) fires on every successful poll — used by the web layer
+    to surface live progress (task.info.progress percent + descriptionId).
+    """
     start = time.monotonic()
     while True:
         try:
@@ -47,6 +51,11 @@ def wait_for_task(task, timeout: int = 600, interval: float = 1.0) -> dict[str, 
                 "result": getattr(task.info, "result", None),
                 "error": _format_task_error(task) if state == "error" else None,
             }
+        if on_poll is not None:
+            try:
+                on_poll(task.info)
+            except Exception:
+                pass
         if time.monotonic() - start > timeout:
             try:
                 task.CancelTask()
