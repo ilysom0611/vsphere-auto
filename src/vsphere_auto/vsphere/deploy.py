@@ -39,16 +39,27 @@ def _view(content, vim_types: list):
 # ---------------------------------------------------------------------------
 
 def _resolve_dc(content, datacenter: str | None):
-    """Return (dc, search_root). Raises ValueError when a *named* DC is missing."""
+    """Return (dc, search_root). Raises ValueError when a *named* DC is missing.
+
+    With datacenter=None the single available datacenter is used automatically
+    (a direct-ESXi connection reports exactly one 'ha-datacenter'); multiple
+    datacenters are an error — silent wrong-place deployment is worse.
+    """
     from pyVmomi import vim
 
-    if not datacenter:
-        return None, content.rootFolder
     with _view(content, [vim.Datacenter]) as view:
-        for d in list(view.view):
+        dcs = list(view.view)
+    if datacenter:
+        for d in dcs:
             if getattr(d, "name", None) == datacenter:
                 return d, d
-    raise ValueError(f"datacenter {datacenter!r} not found")
+        raise ValueError(f"datacenter {datacenter!r} not found")
+    if len(dcs) == 1:
+        return dcs[0], dcs[0]
+    if len(dcs) > 1:
+        names = sorted(str(getattr(d, "name", "?")) for d in dcs)
+        raise ValueError(f"multiple datacenters found {names} — specify vcenter.datacenter explicitly")
+    return None, content.rootFolder
 
 
 def _walk(root, vim_type) -> list:
@@ -81,6 +92,53 @@ def _require_first(objs: list, kind: str, name: str):
     if not objs:
         raise ValueError(f"{kind} {name!r} not found")
     return objs[0]
+
+
+def _collect_resource_pools(host_root) -> list:
+    """All resource pools under a host folder.
+
+    Resource pools hang off ComputeResource.resourcePool trees, NOT Folder
+    childEntity — a plain _walk over the hostFolder never sees them.
+    """
+    from pyVmomi import vim
+
+    out: list = []
+
+    def _rp_tree(rp) -> None:
+        out.append(rp)
+        for child in list(getattr(rp, "resourcePool", []) or []):
+            _rp_tree(child)
+
+    for cr in _walk(host_root, vim.ComputeResource):
+        root_rp = getattr(cr, "resourcePool", None)
+        if root_rp is not None:
+            _rp_tree(root_rp)
+    return out
+
+
+def _pick_standalone_host(host_root, vim):
+    """Placement fallback for cluster-less datacenters: the eligible connected
+    non-maintenance standalone host running fewest VMs, with its root pool."""
+    best = None
+    for cr in _walk(host_root, vim.ComputeResource):
+        if isinstance(cr, vim.ClusterComputeResource):
+            continue
+        rp = getattr(cr, "resourcePool", None)
+        for h in list(getattr(cr, "host", []) or []):
+            runtime = getattr(h, "runtime", None)
+            if runtime is None or getattr(runtime, "connectionState", None) != "connected":
+                continue
+            if getattr(runtime, "inMaintenanceMode", False):
+                continue
+            try:
+                load = len(list(getattr(h, "vm", []) or []))
+            except Exception:
+                load = 0
+            if best is None or load < best[0]:
+                best = (load, h, rp)
+    if best is None:
+        return None, None
+    return best[1], best[2]
 
 
 def _pick_host(cluster_obj, vim):
@@ -319,7 +377,11 @@ def clone_from_template(
     content = si.RetrieveContent()
     dc, scope = _resolve_dc(content, datacenter)
 
-    tpl_matches = [t for t in _walk(scope, vim.VirtualMachine)
+    # Templates live under the datacenter's vmFolder — walking rootFolder or
+    # the Datacenter object itself finds nothing (Datacenter has no
+    # childEntity; rootFolder's children are Datacenters, not Folders).
+    vm_root = getattr(dc, "vmFolder", None) or scope
+    tpl_matches = [t for t in _walk(vm_root, vim.VirtualMachine)
                    if getattr(t, "config", None) and getattr(t.config, "template", False)
                    and getattr(t, "name", None) == template_name]
     if not tpl_matches:
@@ -330,7 +392,6 @@ def clone_from_template(
     # Destination folder: default = template's parent, else dc.vmFolder/root
     dest_folder = getattr(tpl, "parent", None) or (getattr(dc, "vmFolder", None) if dc else content.rootFolder)
     if folder_name:
-        vm_root = getattr(dc, "vmFolder", None) if dc else content.rootFolder
         f = _folder_by_path(vm_root, folder_name, vim)
         if f is None:
             raise ValueError(f"VM folder {folder_name!r} not found"
@@ -347,21 +408,30 @@ def clone_from_template(
                                             "datastore", datastore)
 
     # Resource pool
+    host_root = getattr(dc, "hostFolder", None) if dc else content.rootFolder
     if resource_pool:
-        rp_root = getattr(dc, "hostFolder", None) if dc else content.rootFolder
-        rp_objs = _walk(rp_root, vim.ResourcePool)
+        rp_objs = _collect_resource_pools(host_root)
         relocate.pool = _require_first([p for p in rp_objs if getattr(p, "name", None) == resource_pool],
                                        "resource pool", resource_pool)
 
     # Cluster/host placement
     if cluster:
-        host_root = getattr(dc, "hostFolder", None) if dc else content.rootFolder
         cl_objs = _walk(host_root, vim.ClusterComputeResource)
         cl = _require_first([c for c in cl_objs if getattr(c, "name", None) == cluster], "cluster", cluster)
         chosen = _pick_host(cl, vim)
         if chosen is not None:
             relocate.host = chosen
+        if relocate.pool is None:
+            relocate.pool = getattr(cl, "resourcePool", None)
         # DRS clusters: leave host unset so vCenter places the VM
+    elif relocate.pool is None:
+        # Cluster-less datacenter (standalone hosts only): pick the least-loaded
+        # connected host and its root pool, otherwise CloneVM has no placement.
+        chosen, pool = _pick_standalone_host(host_root, vim)
+        if chosen is not None:
+            relocate.host = chosen
+        if pool is not None:
+            relocate.pool = pool
 
     # Target network remap — without this the cloned VM silently keeps the
     # template's portgroup regardless of what the user selected.
@@ -538,8 +608,6 @@ def create_vm_from_iso(
     if dc:
         host_root = getattr(dc, "hostFolder", None)
         clusters = _walk(host_root, vim.ClusterComputeResource)
-        standalone = [c for c in _walk(host_root, vim.ComputeResource)
-                      if not isinstance(c, vim.ClusterComputeResource)]
         if clusters:
             # prefer a cluster that yields an eligible host / usable pool
             for cl in clusters:
@@ -547,15 +615,12 @@ def create_vm_from_iso(
                 host_obj = _pick_host(cl, vim)
                 if rp is not None:
                     break
-        elif standalone:
-            cr = standalone[0]
-            rp = getattr(cr, "resourcePool", None)
-            hosts = list(getattr(cr, "host", []) or [])
-            if hosts:
-                host_obj = hosts[0]
         else:
-            raise ValueError("no clusters or hosts found in datacenter "
-                             f"{getattr(dc, 'name', '?')!r}")
+            # cluster-less datacenter: least-loaded connected standalone host
+            host_obj, rp = _pick_standalone_host(host_root, vim)
+            if host_obj is None and rp is None:
+                raise ValueError("no clusters or hosts found in datacenter "
+                                 f"{getattr(dc, 'name', '?')!r}")
     else:
         # ESXi direct connection: no datacenters exist
         esxi_direct = True
