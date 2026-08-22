@@ -33,6 +33,85 @@ def _view(content, vim_types: list):
             pass
 
 
+def _collect_objs(content, root, vim_types: list) -> list:
+    """All objects of vim_types under root via ONE container view.
+
+    Two SOAP round trips total (CreateContainerView + view.view bulk response),
+    regardless of inventory size — the lazy _walk() alternative costs one call
+    per folder node, which stalls minutes on slow 6.7 appliances.
+    """
+    view = content.viewManager.CreateContainerView(root, list(vim_types), True)
+    try:
+        return list(view.view)
+    finally:
+        try:
+            view.Destroy()
+        except Exception:
+            pass
+
+
+def _bulk_props(content, root, vim_type, paths: list) -> tuple[dict, dict]:
+    """Bulk-retrieve properties for every vim_type object under root.
+
+    Same strategy as discovery._collect_inventory (validated on a 6.7.3
+    appliance): explicit objectSet per object — no view-filter TraversalSpec,
+    which some servers answer with an empty result set.
+
+    Returns ({moid: obj}, {moid: {path: value}}).
+    """
+    from pyVmomi import vim
+
+    objs = _collect_objs(content, root, [vim_type])
+    by_moid = {str(getattr(o, "_moId", "")): o for o in objs}
+    if not objs:
+        return by_moid, {}
+    ocs = content.propertyCollector.RetrieveProperties([
+        vim.PropertyFilterSpec(
+            objectSet=[vim.ObjectSpec(obj=o) for o in objs],
+            propSet=[vim.PropertySpec(type=vim_type, all=False, pathSet=list(paths))],
+        )
+    ])
+    props: dict[str, dict] = {}
+    for oc in ocs:
+        o = getattr(oc, "obj", None)
+        d: dict = {}
+        # field name differs across pyVmomi generations (propSet vs prop)
+        for key in ("propSet", "prop"):
+            entries = getattr(oc, key, None)
+            if entries:
+                for p in entries:
+                    d[p.name] = p.val
+                break
+        props[str(getattr(o, "_moId", ""))] = d
+    return by_moid, props
+
+
+def _bulk_names(content, objs: list) -> dict:
+    """{moid: name} for a list of managed-object refs, in ONE round trip."""
+    from pyVmomi import vim
+
+    if not objs:
+        return {}
+    try:
+        ocs = content.propertyCollector.RetrieveProperties([
+            vim.PropertyFilterSpec(
+                objectSet=[vim.ObjectSpec(obj=o) for o in objs],
+                propSet=[vim.PropertySpec(type=vim.Folder, all=False, pathSet=["name"])],
+            )
+        ])
+    except Exception:
+        return {}
+    out: dict[str, str] = {}
+    for oc in ocs:
+        o = getattr(oc, "obj", None)
+        for key in ("propSet", "prop"):
+            entries = getattr(oc, key, None)
+            if entries:
+                out[str(getattr(o, "_moId", ""))] = next((p.val for p in entries if p.name == "name"), "")
+                break
+    return out
+
+
 # ---------------------------------------------------------------------------
 # scoped lookups — everything resolves inside a datacenter when one is given,
 # and a NAMED object that cannot be found is an error, never a silent fallback.
@@ -47,8 +126,7 @@ def _resolve_dc(content, datacenter: str | None):
     """
     from pyVmomi import vim
 
-    with _view(content, [vim.Datacenter]) as view:
-        dcs = list(view.view)
+    dcs = _collect_objs(content, content.rootFolder, [vim.Datacenter])
     if datacenter:
         for d in dcs:
             if getattr(d, "name", None) == datacenter:
@@ -62,39 +140,13 @@ def _resolve_dc(content, datacenter: str | None):
     return None, content.rootFolder
 
 
-def _walk(root, vim_type) -> list:
-    """Collect all managed objects of vim_type reachable through Folder.childEntity."""
-    out: list = []
-
-    def _descend(node) -> None:
-        try:
-            children = node.childEntity
-        except AttributeError:
-            return
-        for child in list(children):
-            if isinstance(child, vim_type):
-                out.append(child)
-            # descend only into Folders (never into Datacenter.hostFolder etc.
-            # unless that is what we are walking — those are Folders too)
-            try:
-                from pyVmomi import vim as _vim
-
-                if isinstance(child, _vim.Folder):
-                    _descend(child)
-            except Exception:
-                continue
-
-    _descend(root)
-    return out
-
-
 def _require_first(objs: list, kind: str, name: str):
     if not objs:
         raise ValueError(f"{kind} {name!r} not found")
     return objs[0]
 
 
-def _collect_resource_pools(host_root) -> list:
+def _collect_resource_pools(content, host_root) -> list:
     """All resource pools under a host folder.
 
     Resource pools hang off ComputeResource.resourcePool trees, NOT Folder
@@ -109,18 +161,18 @@ def _collect_resource_pools(host_root) -> list:
         for child in list(getattr(rp, "resourcePool", []) or []):
             _rp_tree(child)
 
-    for cr in _walk(host_root, vim.ComputeResource):
+    for cr in _collect_objs(content, host_root, [vim.ComputeResource]):
         root_rp = getattr(cr, "resourcePool", None)
         if root_rp is not None:
             _rp_tree(root_rp)
     return out
 
 
-def _pick_standalone_host(host_root, vim):
+def _pick_standalone_host(content, host_root, vim):
     """Placement fallback for cluster-less datacenters: the eligible connected
     non-maintenance standalone host running fewest VMs, with its root pool."""
     best = None
-    for cr in _walk(host_root, vim.ComputeResource):
+    for cr in _collect_objs(content, host_root, [vim.ComputeResource]):
         if isinstance(cr, vim.ClusterComputeResource):
             continue
         rp = getattr(cr, "resourcePool", None)
@@ -175,9 +227,13 @@ def _pick_host(cluster_obj, vim):
     return candidates[0][1]
 
 
-def _folder_by_path(vm_folder_root, folder_name: str, vim):
+def _folder_by_path(content, vm_folder_root, folder_name: str, vim):
     """Find a Folder under vmFolder subtree matching a '/'-separated path.
-    Only folders whose childType includes VirtualMachine qualify."""
+    Only folders whose childType includes VirtualMachine qualify.
+
+    Child names are bulk-retrieved per segment (one RetrieveProperties call),
+    not lazily per child — slow appliances make the lazy loop minutes-long.
+    """
     parts = [p.strip() for p in folder_name.strip("/").split("/") if p.strip()]
     if not parts:
         return None
@@ -190,24 +246,48 @@ def _folder_by_path(vm_folder_root, folder_name: str, vim):
 
     current = [vm_folder_root]
     for part in parts:
-        nxt = []
+        candidates: list = []
         for node in current:
             try:
-                children = node.childEntity
+                children = node.childEntity  # one SOAP call per node
             except AttributeError:
                 continue
-            for child in list(children):
-                if isinstance(child, vim.Folder) and getattr(child, "name", None) == part and _has_childtype(child):
-                    nxt.append(child)
+            candidates += [c for c in list(children) if isinstance(c, vim.Folder)]
+        if not candidates:
+            return None
+        names = _bulk_names(content, candidates)
+        nxt = [
+            c for c in candidates
+            if names.get(str(getattr(c, "_moId", "")), getattr(c, "name", None)) == part and _has_childtype(c)
+        ]
         if not nxt:
             return None
         current = nxt
     return current[0]
 
 
+def _parent_chain_path(vm) -> list[str] | None:
+    """Folder-name chain from the VM's parent up to (not including) a non-Folder."""
+    from pyVmomi import vim
+
+    names: list[str] = []
+    node = getattr(vm, "parent", None)
+    depth = 0
+    while node is not None and depth < 32:
+        if not isinstance(node, vim.Folder):
+            break
+        names.append(getattr(node, "name", "") or "")
+        node = getattr(node, "parent", None)
+        depth += 1
+    names.reverse()
+    return names if names else None
+
+
 def find_vm(content, name: str, folder_name: str | None = None):
     """Find VM by name, optionally scoped to a folder ('/'-path supported).
 
+    Names are bulk-retrieved in ONE PropertyCollector round trip — the previous
+    lazy loop cost one SOAP call per VM and stalled minutes on slow appliances.
     A VM whose parent chain cannot be walked is treated as NON-matching when
     a folder filter was requested (previously it bypassed the filter, making
     the duplicate-name idempotency check unreliable).
@@ -215,56 +295,68 @@ def find_vm(content, name: str, folder_name: str | None = None):
     from pyVmomi import vim
 
     req_parts = [p.strip() for p in (folder_name or "").split("/") if p.strip()]
-
-    def _parent_chain_path(vm) -> list[str] | None:
-        names: list[str] = []
-        node = getattr(vm, "parent", None)
-        depth = 0
-        while node is not None and depth < 32:
-            if not isinstance(node, vim.Folder):
-                break
-            names.append(getattr(node, "name", "") or "")
-            node = getattr(node, "parent", None)
-            depth += 1
-        names.reverse()
-        return names if names else None
-
-    with _view(content, [vim.VirtualMachine]) as view:
-        for vm in list(view.view):
-            try:
-                if getattr(vm, "name", None) != name:
+    try:
+        by_moid, props = _bulk_props(content, content.rootFolder, vim.VirtualMachine, ["name"])
+    except Exception as e:
+        log.warning("find_vm %r: bulk retrieval failed (%s) — falling back to lazy scan", name, e)
+        by_moid, props = {}, {}
+        with _view(content, [vim.VirtualMachine]) as view:
+            for vm in list(view.view):
+                mid = str(getattr(vm, "_moId", ""))
+                try:
+                    props[mid] = {"name": getattr(vm, "name", None)}
+                except Exception:
                     continue
-            except Exception:
-                continue
-            if req_parts:
-                chain = _parent_chain_path(vm)
-                if chain is None:
-                    continue  # unfilterable — do NOT treat as a match
-                if len(req_parts) > 1:
-                    # multi-segment path: require the tail of the chain to match
-                    if chain[-len(req_parts):] != req_parts:
-                        continue
-                else:
-                    if req_parts[0] not in chain:
-                        continue
-            return vm
+                by_moid[mid] = vm
+
+    for mid, d in props.items():
+        if d.get("name") != name:
+            continue
+        vm = by_moid.get(mid)
+        if vm is None:
+            continue
+        if req_parts:
+            chain = _parent_chain_path(vm)
+            if chain is None:
+                continue  # unfilterable — do NOT treat as a match
+            if len(req_parts) > 1:
+                # multi-segment path: require the tail of the chain to match
+                if chain[-len(req_parts):] != req_parts:
+                    continue
+            else:
+                if req_parts[0] not in chain:
+                    continue
+        return vm
     return None
 
 
 def find_template(content, name: str, search_root=None):
+    """Find a template by name. Bulk retrieval: 2 SOAP calls total.
+
+    config.template may be rejected by restricted servers — retry with name
+    only would mark every VM a template, so on failure fall back to a lazy
+    scan of candidates whose name already matched.
+    """
     from pyVmomi import vim
 
     root = search_root if search_root is not None else content.rootFolder
-    templates = [t for t in _walk(root, vim.VirtualMachine)]
-    matches = []
-    for t in templates:
-        try:
-            cfg = getattr(t, "config", None)
-            if getattr(t, "name", None) == name and cfg and getattr(cfg, "template", False):
-                matches.append(t)
-        except Exception:
-            continue
-    return matches[0] if matches else None
+    try:
+        by_moid, props = _bulk_props(content, root, vim.VirtualMachine, ["name", "config.template"])
+        mids = [m for m, d in props.items() if d.get("name") == name and bool(d.get("config.template", False))]
+    except Exception as e:
+        log.warning("find_template %r: bulk retrieval failed (%s) — falling back to lazy scan", name, e)
+        candidates = [o for o in _collect_objs(content, root, [vim.VirtualMachine])
+                      if getattr(o, "name", None) == name]
+        matches = [t for t in candidates
+                   if getattr(getattr(t, "config", None), "template", False)]
+        return matches[0] if matches else None
+    if not mids:
+        return None
+    obj = by_moid.get(mids[0])
+    # confirm via one lazy read so callers can rely on .config being populated
+    if obj is not None and getattr(getattr(obj, "config", None), "template", False):
+        return obj
+    return None
 
 
 def _poll_task(task, timeout: int, interval: float = _TASK_POLL_INTERVAL) -> dict[str, Any]:
@@ -381,18 +473,15 @@ def clone_from_template(
     # the Datacenter object itself finds nothing (Datacenter has no
     # childEntity; rootFolder's children are Datacenters, not Folders).
     vm_root = getattr(dc, "vmFolder", None) or scope
-    tpl_matches = [t for t in _walk(vm_root, vim.VirtualMachine)
-                   if getattr(t, "config", None) and getattr(t.config, "template", False)
-                   and getattr(t, "name", None) == template_name]
-    if not tpl_matches:
+    tpl = find_template(content, template_name, search_root=vm_root)
+    if tpl is None:
         raise ValueError(f"Template {template_name!r} not found"
                          + (f" in datacenter {datacenter!r}" if datacenter else ""))
-    tpl = tpl_matches[0]
 
     # Destination folder: default = template's parent, else dc.vmFolder/root
     dest_folder = getattr(tpl, "parent", None) or (getattr(dc, "vmFolder", None) if dc else content.rootFolder)
     if folder_name:
-        f = _folder_by_path(vm_root, folder_name, vim)
+        f = _folder_by_path(content, vm_root, folder_name, vim)
         if f is None:
             raise ValueError(f"VM folder {folder_name!r} not found"
                              + (f" in datacenter {datacenter!r}" if datacenter else ""))
@@ -403,20 +492,20 @@ def clone_from_template(
     # Datastore
     ds_root = getattr(dc, "datastoreFolder", None) if dc else content.rootFolder
     if datastore:
-        ds_objs = _walk(ds_root, vim.Datastore)
+        ds_objs = _collect_objs(content, ds_root, [vim.Datastore])
         relocate.datastore = _require_first([d for d in ds_objs if getattr(d, "name", None) == datastore],
                                             "datastore", datastore)
 
     # Resource pool
     host_root = getattr(dc, "hostFolder", None) if dc else content.rootFolder
     if resource_pool:
-        rp_objs = _collect_resource_pools(host_root)
+        rp_objs = _collect_resource_pools(content, host_root)
         relocate.pool = _require_first([p for p in rp_objs if getattr(p, "name", None) == resource_pool],
                                        "resource pool", resource_pool)
 
     # Cluster/host placement
     if cluster:
-        cl_objs = _walk(host_root, vim.ClusterComputeResource)
+        cl_objs = _collect_objs(content, host_root, [vim.ClusterComputeResource])
         cl = _require_first([c for c in cl_objs if getattr(c, "name", None) == cluster], "cluster", cluster)
         chosen = _pick_host(cl, vim)
         if chosen is not None:
@@ -427,7 +516,7 @@ def clone_from_template(
     elif relocate.pool is None:
         # Cluster-less datacenter (standalone hosts only): pick the least-loaded
         # connected host and its root pool, otherwise CloneVM has no placement.
-        chosen, pool = _pick_standalone_host(host_root, vim)
+        chosen, pool = _pick_standalone_host(content, host_root, vim)
         if chosen is not None:
             relocate.host = chosen
         if pool is not None:
@@ -438,9 +527,7 @@ def clone_from_template(
     net_device_changes: list = []
     if network:
         net_root = getattr(dc, "networkFolder", None) if dc else content.rootFolder
-        net_objs = _walk(net_root, vim.Network) + (
-            [] if dc else []
-        )
+        net_objs = _collect_objs(content, net_root, [vim.Network])
         matches = [n for n in net_objs if getattr(n, "name", None) == network]
         if not matches and dc is None:
             with _view(content, [vim.Network]) as view:
@@ -587,7 +674,7 @@ def create_vm_from_iso(
     dest_folder = getattr(dc, "vmFolder", None) if dc else content.rootFolder
     if folder_name:
         vm_root = getattr(dc, "vmFolder", None) if dc else content.rootFolder
-        f = _folder_by_path(vm_root, folder_name, vim)
+        f = _folder_by_path(content, vm_root, folder_name, vim)
         if f is None:
             raise ValueError(f"VM folder {folder_name!r} not found"
                              + (f" in datacenter {datacenter!r}" if datacenter else ""))
@@ -595,7 +682,7 @@ def create_vm_from_iso(
 
     # ---- datastore (DC-scoped, strict) ----
     ds_root = getattr(dc, "datastoreFolder", None) if dc else content.rootFolder
-    ds_matches = [d for d in _walk(ds_root, vim.Datastore) if getattr(d, "name", None) == datastore]
+    ds_matches = [d for d in _collect_objs(content, ds_root, [vim.Datastore]) if getattr(d, "name", None) == datastore]
     if not ds_matches:
         raise ValueError(f"datastore {datastore!r} not found"
                          + (f" in datacenter {datacenter!r}" if datacenter else ""))
@@ -607,7 +694,7 @@ def create_vm_from_iso(
     esxi_direct = False
     if dc:
         host_root = getattr(dc, "hostFolder", None)
-        clusters = _walk(host_root, vim.ClusterComputeResource)
+        clusters = _collect_objs(content, host_root, [vim.ClusterComputeResource])
         if clusters:
             # prefer a cluster that yields an eligible host / usable pool
             for cl in clusters:
@@ -617,7 +704,7 @@ def create_vm_from_iso(
                     break
         else:
             # cluster-less datacenter: least-loaded connected standalone host
-            host_obj, rp = _pick_standalone_host(host_root, vim)
+            host_obj, rp = _pick_standalone_host(content, host_root, vim)
             if host_obj is None and rp is None:
                 raise ValueError("no clusters or hosts found in datacenter "
                                  f"{getattr(dc, 'name', '?')!r}")
@@ -642,7 +729,7 @@ def create_vm_from_iso(
     net_obj = None
     if network_name:
         net_root = getattr(dc, "networkFolder", None) if dc else content.rootFolder
-        matches = [n for n in _walk(net_root, vim.Network) if getattr(n, "name", None) == network_name]
+        matches = [n for n in _collect_objs(content, net_root, [vim.Network]) if getattr(n, "name", None) == network_name]
         if not matches:
             raise ValueError(f"network {network_name!r} not found"
                              + (f" in datacenter {datacenter!r}" if datacenter else ""))
