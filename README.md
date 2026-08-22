@@ -1,415 +1,181 @@
-# vSphere Auto — Batch VM Deployment
+# vSphere Auto — vSphere 批量虚拟机部署工具
 
-Automated, **Linux-first** batch VM deployment for **vSphere (vCenter / ESXi)**. Supports template clone and ISO-based provisioning, auto resource selection, concurrent multi-VM batches, idempotent/robust execution, **Web UI + CLI** sharing the same core, and Fernet-encrypted credential storage.
+**解决什么问题**：vSphere 自带界面一次只能创建一台 VM，规格/网络/IP 要逐台手填。本工具把这件事变成一次操作——Web 向导 4 步或一条 CLI 命令，批量创建数十台规格一致的虚拟机：自动发现 vSphere 资源、可手动指定文件夹/存储/主机放置、并发部署、静态 IP 与主机名首次开机自动注入、任务实时进度、失败时给出明确原因和处置建议。
 
-> Runtime: Linux · Python 3.11+ · vCenter 6.7 / 7.0 U3+ / 8.0+ or direct ESXi
+- 模板克隆（推荐）或 ISO 全新装机
+- DHCP 或静态 IP（掩码/网关/DNS/主机名经 Guest Customization 写入 VM）
+- 幂等可重跑：中断后重新执行不会重复建 VM
+- 密码加密存储，日志与输出自动脱敏
 
----
-
-## Prerequisites
-
-- **OS:** Linux with systemd. See [Recommended OS Versions](#recommended-os-versions) below. macOS works for development only.
-- **Python:** 3.11 or newer. `install.sh` auto-provisions Python 3.11 when missing (including CentOS 7 via `uv` without root) — just run `bash install.sh`.
-  Manual install if needed: `sudo apt install python3.11 python3.11-venv python3-pip` (Debian/Ubuntu) or `sudo dnf install python3.11` (RHEL/Rocky).
-- **Network:** Reachability to vCenter/ESXi on port 443.
-- **vSphere access:** An account with permissions to create/clone VMs, read datastores/networks/folders, and run guest customization (e.g. `Administrator@vsphere.local` or a custom role).
-- **Optional:** `uv` (faster installs; `pip` works fine without it). Install via `curl -LsSf https://astral.sh/uv/install.sh | sh`.
-
-### Recommended OS Versions
-
-> `install.sh` auto-installs Python 3.11 when not present, so most modern distros work out of the box. The table below is the **tested / recommended** matrix for production.
-
-| OS | Version | Status | Notes |
-|----|---------|--------|-------|
-| **Ubuntu** | **22.04 LTS / 24.04 LTS** | ✅ Recommended | Best tested; Python 3.11+ available via `apt`. First choice for new deployments. |
-| Ubuntu | 20.04 LTS | ⚠️ Supported | Works, but EOL Apr 2030 (ESM). Python 3.11 via `apt` / `deadsnakes` PPA. |
-| **RHEL / Rocky / Alma** | **9.x** | ✅ Recommended | Production recommended; `dnf install python3.11` natively. |
-| RHEL / Rocky / Alma | 8.x | ✅ Supported | Fully supported; `dnf install python3.11` natively. |
-| **Debian** | **12 (bookworm)** | ✅ Recommended | `apt install python3.11` natively. |
-| Debian | 11 (bullseye) | ⚠️ Supported | Works; Python 3.11 via `bullseye-backports` or `uv`. |
-| CentOS | 7 | ⚠️ Legacy — EOL Jun 30 2024 | Still works via `install.sh` auto-provision (`uv` pulls Python 3.11 without root). **Migrate to Rocky/Alma 8/9 strongly recommended** — no security updates. |
-| CentOS Stream / Fedora | latest | ⚠️ Community | Should work; not formally tested in CI. |
-| macOS | 13+ | 🛠️ Dev only | For development / `plan` dry runs; not for production service. |
-
-**vSphere:** vCenter **6.7 / 7.0 U3+ / 8.0+** and ESXi 6.7/7.0/8.0. Direct ESXi connections work but some `CustomizationSpec` (guest customization) features require vCenter — the tool falls back automatically. On **6.7** the client relaxes TLS ciphers automatically (see Troubleshooting if discover still fails).
-
-**Why not CentOS 7 for new installs?** CentOS 7 reached EOL and ships Python 3.6 + pip 8 which cannot build this project. `install.sh` works around it, but you inherit an unpatched base OS. For any new host, use **Ubuntu 22.04/24.04** or **Rocky/Alma 9**.
-
-### Guest customization prerequisites
-
-IP/hostname customization (static IP, hostname via `CustomizationSpec` / LinuxPrep) only works if the **template's guest OS can run it**:
-
-- **VMware Tools must be installed and running** inside the template (`open-vm-tools` on Linux). Without it, vCenter customization silently does nothing or fails mid-task.
-- **Cloud-init-enabled templates will override vCenter customization.** Most CentOS 7.9 cloud images ship cloud-init, which rewrites the network config at first boot and discards the static IP/hostname set by LinuxPrep. Either:
-  - disable cloud-init network configuration in the template:
-    ```bash
-    echo "network: {config: disabled}" > /etc/cloud/cloud.cfg.d/99-disable-network-config.cfg
-    ```
-  - or use a **non-cloud-init template** for static-IP deployments.
-- Templates cloned without any explicit IP (`ip: dhcp` / no ipPool) do not need customization and work with plain templates.
+> 运行环境：Linux · Python 3.11+ · vCenter 6.7 / 7.0 U3+ / 8.0+ 或直连 ESXi
 
 ---
 
-## Dependencies
+## 使用场景
 
-All Python dependencies are declared in `pyproject.toml` and installed automatically by `install.sh`. No manual `pip install` is needed.
+- **测试/开发/演示环境批量发放**：一次创建数十台同规格 VM；环境用完可删，配合幂等特性随时重新发放
+- **标准化交付**：固定规格 + 静态 IP 规划，批量交付给使用方，IP/网关/DNS/主机名开箱即用
+- **ISO 全新装机**：无模板时从 ISO 批量安装并完成网络定制
+- **精确放置**：手动指定目标文件夹（分级树选择）、数据存储、宿主机（含主机↔存储挂载校验）；不指定则自动选择
 
-| Package | Version | Purpose |
-|---------|---------|---------|
-| `flask` | >=3.0 | Web UI and REST API |
-| `waitress` | >=3.0 | Production WSGI server (used by `serve` outside debug mode) |
-| `pyvmomi` | >=7.0 | vSphere SOAP API (clone, create VM, customization, discovery) |
-| `pyyaml` | >=6.0 | YAML config parsing |
-| `pydantic` | >=2.0 | Config validation |
-| `typer` | >=0.12 | CLI |
-| `rich` | >=13.0 | CLI tables and progress |
-| `cryptography` | >=42.0 | Fernet encryption for stored passwords |
-| `tenacity` | >=8.0 | Retry with backoff for vSphere connections |
-| `requests` | >=2.31 | vSphere REST helpers (content library, etc.) |
-| `jinja2` | >=3.1 | Template rendering (cloud-init, etc.) |
+## 兼容性
 
-Build backend: `hatchling`.
+| 项目 | 要求 |
+|------|------|
+| vCenter | 6.7 / 7.0 U3+ / 8.0+（已在 vCenter 6.7.3 实测验证） |
+| ESXi | 6.7 / 7.0 / 8.0；直连 ESXi 可用，但部分客户机定制功能受限（自动回退） |
+| 模板 | 需已安装并运行 VMware Tools / open-vm-tools（静态 IP 定制依赖它） |
+| 操作系统 | 见下方「安装要求」 |
+
+> **cloud-init 模板注意**：多数 CentOS 7.9 云镜像自带 cloud-init，会在首次开机时覆盖 vCenter 下发的静态 IP/主机名。静态 IP 部署请在模板中禁用 cloud-init 网络配置：
+> ```bash
+> echo "network: {config: disabled}" > /etc/cloud/cloud.cfg.d/99-disable-network-config.cfg
+> ```
+> DHCP 部署不受影响。
 
 ---
 
-## One-Click Download & Start
+## 安装要求
 
-### Option A: git (recommended)
+- **操作系统**：Linux（systemd 可选）。推荐 **Ubuntu 22.04/24.04 LTS**、**RHEL/Rocky/Alma 8/9**、**Debian 12**；CentOS 7 仍可用（脚本自动安装 Python 3.11，无需 root，但系统本身已 EOL，不建议新部署）
+- **Python**：3.11+（`install.sh` 自动检测并安装，通常无需手动处理）
+- **网络**：服务器到 vCenter/ESXi 的 443 端口可达；首次安装需要访问 pypi.org（离线主机请预装 Python 3.11 及依赖）
+- **vSphere 账号**：具备创建/克隆 VM、读取数据中心/数据存储/网络/文件夹、执行客户机定制的权限（如 `Administrator@vsphere.local`）
+
+## 快速安装
 
 ```bash
+# 方式一：git
 git clone https://github.com/ilysom0611/vsphere-auto.git
 cd vsphere-auto
-bash install.sh
-bash start.sh
-# Open http://localhost:8080
-```
+bash install.sh     # 自动创建 venv、安装依赖、初始化加密密钥
+bash start.sh       # 启动 Web 服务，默认 http://localhost:8080
 
-### Option B: curl (no git required)
-
-`install.sh` auto-clones the repo when piped, so no prior `git clone` is needed:
-
-```bash
+# 方式二：无 git，一行安装（自动克隆仓库到 ./vsphere-auto）
 curl -fsSL https://raw.githubusercontent.com/ilysom0611/vsphere-auto/main/install.sh | bash
-# repo is cloned to ./vsphere-auto automatically
 bash vsphere-auto/start.sh
-# or: cd vsphere-auto && bash start.sh
-# Open http://localhost:8080
 ```
 
-> If `git` is not installed the script will exit with install instructions.
-
-### Option C: uv users
+生产环境建议注册为 systemd 服务：
 
 ```bash
-git clone https://github.com/ilysom0611/vsphere-auto.git && cd vsphere-auto
-uv sync && uv run vsphere-auto --help
-uv run vsphere-auto serve --port 8080
+sudo bash install.sh --install-service   # 自动替换路径，开机自启、崩溃自动重启
 ```
 
-### One-Click Install Commands (with dependency install)
+Docker 暂未提供。
 
-If your host is fresh and you want everything in one go — system deps + Python + app:
-
-**Debian / Ubuntu (apt):**
+### 停止方式
 
 ```bash
-# 1) System packages
-sudo apt update && sudo apt install -y python3.11 python3.11-venv python3-pip git curl
+# systemd 方式安装的服务
+sudo systemctl stop vsphere-auto        # 启动: start / 重启: restart / 开机自启状态: systemctl is-enabled vsphere-auto
 
-# 2) App
-git clone https://github.com/ilysom0611/vsphere-auto.git && cd vsphere-auto
-bash install.sh
+# bash start.sh 前台运行：直接 Ctrl+C
 
-# 3) Verify
-.venv/bin/vsphere-auto --help   # venv entrypoint (always works after install.sh)
-# or: vsphere-auto --help            # if .venv/bin is on PATH or pip --user
-# or: python3 -m vsphere_auto --help # module form
-# or: uv run vsphere-auto --help     # if uv is installed
-
-# 4) Start Web UI
-bash start.sh  # http://localhost:8080 (auto-picks .venv/bin/python)
+# nohup / 后台手动启动的进程
+pkill -f 'vsphere_auto serve'
 ```
 
-**RHEL / Rocky 8+ (dnf):**
+停止不影响已保存的凭据和历史任务（都在 `state/` 目录，重启后自动恢复；中断批次会被标记为 interrupted）。
+
+### 更新方式
 
 ```bash
-sudo dnf install -y python3.11 python3-pip git curl
-git clone https://github.com/ilysom0611/vsphere-auto.git && cd vsphere-auto
-bash install.sh && bash start.sh
+cd vsphere-auto
+git pull origin main
+bash install.sh     # 依赖有变化时刷新 venv（可重复执行）
+# 按当前运行方式重启：
+sudo systemctl restart vsphere-auto    # 或重新 bash start.sh
 ```
 
-**CentOS 7:**
-
-```bash
-# install.sh auto-installs Python 3.11 via uv (no root needed).
-# Network access to pypi.org is required; offline hosts need Python 3.11 preinstalled.
-git clone https://github.com/ilysom0611/vsphere-auto.git && cd vsphere-auto
-bash install.sh          # pulls Python 3.11, upgrades pip, installs deps
-bash start.sh            # uses the provisioned interpreter automatically
-# If auto-provision fails (offline/no curl):
-#   curl -LsSf https://astral.sh/uv/install.sh | sh; export PATH="$HOME/.local/bin:$PATH"
-#   uv python install 3.11; bash install.sh
-#   # or: yum install centos-release-scl && yum install rh-python311 && scl enable rh-python311 bash
-```
-
-**Using uv (any distro):**
-
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-export PATH="$HOME/.local/bin:$PATH"
-git clone https://github.com/ilysom0611/vsphere-auto.git && cd vsphere-auto
-uv sync
-uv run vsphere-auto --help
-uv run vsphere-auto serve --port 8080
-```
-
-**Manual pip (no install.sh):**
-
-```bash
-python3 -m venv .venv && source .venv/bin/activate
-pip install -e .
-vsphere-auto --help
-python3 -m vsphere_auto serve --port 8080
-```
-
-> `install.sh` auto-provisions **Python 3.11** when missing (CentOS 7 included: via `uv` without root), picks `uv sync` or `pip install -e .` automatically, creates `state/` and the encryption key `state/.fernet.key` (0600), and records the interpreter to `state/.python_bin` for `start.sh`. When piped via `curl | bash` the script clones the repo to `./vsphere-auto` automatically.
+`state/` 目录（凭据库、任务记录、加密密钥、IP 池）独立于代码，升级自动保留。跨大版本升级前建议先备份 `state/` 目录。
 
 ---
 
-## Quick Start (5 minutes)
+## 使用：Web 向导（推荐）
 
-### 1. Install
+打开 `http://<服务器>:8080`，按 4 步完成部署：
 
-```bash
-bash install.sh
-vsphere-auto --help
-```
+| 步骤 | 操作 |
+|------|------|
+| ① 连接 | 选择已保存的凭据 → 自动发现资源（模板/文件夹/存储/主机/网络/ISO） |
+| ② 来源与放置 | 选择模板（或 ISO）；**手动指定**文件夹（分级树）、数据存储、宿主机、网络 —— 所选主机未挂载该存储时页面会直接警告拦截 |
+| ③ 规格与数量 | 台数、命名规则（如 `demo-{index:02d}`）、CPU/内存/磁盘、置备方式、IP 模式（DHCP/静态：掩码·网关·DNS）、并发数 |
+| ④ 确认部署 | 自动生成部署计划供复核 → 确认后跳转任务页 |
 
-### 2. Save a vCenter / ESXi credential (Web or CLI)
+**任务页（/tasks）**：实时显示每台 VM 的当前操作与克隆百分比；失败时给出**原因分类和处置建议**（如“该主机未挂载所选数据存储”）及原始报错；支持按名称/状态/创建时间筛选，可删除已完成的历史批次和任务。
 
-**Web:** Open `http://localhost:8080/settings` → enter host, port, username, password → Save → click **Test** to verify. Passwords are encrypted with Fernet before being written to `state/creds.db`. To update a password later, edit the credential and fill in a new value; leaving it blank keeps the existing one.
+**设置页（/settings）**：保存 vCenter 凭据（密码 Fernet 加密存储）、一键测试连通性。
 
-**CLI:**
+> `/advanced` 是面向熟悉 YAML 配置用户的完整表单，功能与向导一致。
+
+### CLI（同一套核心）
 
 ```bash
 vsphere-auto creds add --name prod-vc --host 10.0.0.10 --username administrator@vsphere.local
-# Or via env var:
-VSPHERE_PASSWORD='***' vsphere-auto creds add --name prod-vc --host 10.0.0.10 --username administrator@vsphere.local --password "$VSPHERE_PASSWORD"
-vsphere-auto creds list
 vsphere-auto creds test prod-vc
-```
-
-### 3. Discover resources
-
-**Web:** On the Deploy page, select a saved credential from the dropdown → click **Discover Resources**. Templates, clusters, datastores, networks, folders, and ISOs are auto-populated.
-
-**CLI:**
-
-```bash
-vsphere-auto discover --creds prod-vc
-vsphere-auto discover --creds prod-vc --out /tmp/inventory.json
-```
-
-### 4. Deploy VMs
-
-**Web:** Fill in CPU / memory / disk / network / IP mode, pick a template or ISO, set batch count and naming template (e.g. `demo-{index:02d}`) → **Preview Plan** to review auto selections → **Deploy** → you will be redirected to the Tasks page for live progress.
-
-**CLI:**
-
-```bash
-cp config/config.example.yaml my.yaml
-# Edit my.yaml, then:
-vsphere-auto plan --config my.yaml --creds prod-vc    # dry run — shows auto selections and VM list
+vsphere-auto discover --creds prod-vc                 # 发现资源
+cp config/config.example.yaml my.yaml                 # 编辑规格
+vsphere-auto plan --config my.yaml --creds prod-vc    # 干跑预览
 vsphere-auto deploy --config my.yaml --creds prod-vc --yes
+vsphere-auto serve --port 8080                        # 启动 Web
 ```
 
----
-
-## Configuration
-
-See `config/config.example.yaml`. Key fields:
-
-```yaml
-vcenter:
-  credsRef: prod-vc          # reference a saved credential (or use host/user/password below)
-  # host: 10.0.0.10
-  # user: administrator@vsphere.local
-  datacenter: DC1            # omit for auto when only one DC exists
-  # cluster: auto             # auto = cluster with the most hosts
-  # datastore: auto           # auto = datastore with the most free space
-  # network: auto             # auto = first network found
-
-defaults:
-  folder: workloads/demo
-  guestId: ubuntu64Guest
-
-batch:
-  concurrency: 5             # parallel VM creations
-  onError: continue          # continue | fail-fast
-  naming: "demo-{index:02d}"
-
-ipPool:
-  cidr: 10.10.20.0/24
-  gateway: 10.10.20.1
-  netmask: 255.255.255.0
-  dns: [10.10.20.2, 8.8.8.8]
-
-# Count-based expansion (alternative to listing vms[]):
-# count: 3                   # generate 3 VMs named via batch.naming
-# template: tpl-ubuntu22-04
-
-vms:
-  - name: demo-01
-    template: tpl-ubuntu22-04  # or iso: "[datastore1] iso/ubuntu-22.04.iso"
-    cpu: 4
-    memoryMB: 8192
-    diskGB: 80
-    networks:
-      - network: auto
-        ip: auto              # auto (from pool) | dhcp | 10.10.20.11
-```
-
-- Any resource field set to `auto` or omitted is auto-selected: **cluster** = the one with the **most hosts**, **datastore** = the one with the **most free space**, **network** = the **first** one discovered. There is no free-CPU/memory scoring or reachability probing — pin explicit names when you need precise placement.
-- Each VM needs `template` **or** `iso`; disks can only be expanded, not shrunk.
-- IP pool allocation is all-or-nothing per plan/deploy: if the pool runs out mid-expansion, already-taken leases are rolled back and the run aborts with a clear error instead of deploying half the batch.
-- Never put passwords in YAML — use `VSPHERE_PASSWORD` / `VSPHERE_PASSWORD_FILE` or a saved credential.
+退出码：`0` 全部成功 / `2` 部分成功 / `1` 失败，便于脚本判断。
 
 ---
 
-## Web UI
+## 可靠性设计
 
-| Page | Path | Description |
-|------|------|-------------|
-| Deploy | `/` | Select credential → Discover → form → Preview → Deploy → Tasks |
-| Tasks | `/tasks` | Batch list, per-VM details, auto-refresh |
-| Settings / Credentials | `/settings` | CRUD for credentials, Test connection, update password |
-| Health | `/api/health` | `{"ok": true}` |
+- **幂等**：相同规格重复执行自动跳过已存在的 VM（按 名称+文件夹 识别），不会重复克隆
+- **断点安全**：服务崩溃后重启，残留的 running/pending 任务标记为 interrupted，可直接重新执行
+- **IP 池保护**：池耗尽时整批中止并回滚已分配地址，不会发出一半的批次
+- **保密**：密码加密入库；日志、任务记录、清单输出中的敏感值统一打码；YAML 中永远不要写明文密码（用 `VSPHERE_PASSWORD` 环境变量或已保存凭据）
 
----
+## 安全要点（对外暴露前必读）
 
-## CLI Reference
+1. **务必设置 API Token**：`export VSPHERE_API_TOKEN=<随机串>` 后重启，所有 API 请求需携带该 Token（浏览器首次 401 时会弹窗记住）。不设置时 API 无鉴权且启动时会打印醒目告警。
+2. **默认监听 `0.0.0.0`**：仅本机使用请改 `VSPHERE_HOST=127.0.0.1`；跨网段访问建议前置 nginx/caddy（TLS + 认证）并用防火墙收敛 8080 端口。
+3. **vCenter TLS 校验当前关闭**（兼容 6.7 自签名证书的取舍），请保证管理网络可信。
 
-```bash
-vsphere-auto --help
-vsphere-auto creds list
-vsphere-auto creds add --name prod-vc --host 10.0.0.10 --username admin --password '***'
-vsphere-auto creds update --help
-vsphere-auto creds remove <id>
-vsphere-auto creds test <id|name>
+## 环境变量
 
-vsphere-auto discover --creds prod-vc [--out inventory.json]
-vsphere-auto plan --config my.yaml [--creds prod-vc]
-vsphere-auto deploy --config my.yaml [--creds prod-vc] [--yes]
-vsphere-auto serve [--host 0.0.0.0] [--port 8080] [--debug]
-```
-
-Exit codes: `0` all succeeded, `2` partial success, `1` failure — easy to check in scripts.
+| 变量 | 说明 |
+|------|------|
+| `VSPHERE_STATE_DIR` | 运行时状态目录（凭据库/任务库/IP 池/密钥），默认 `<repo>/state` |
+| `VSPHERE_API_TOKEN` | 设置后启用 API 鉴权（Bearer / X-API-Token 头） |
+| `VSPHERE_HOST` | Web 监听地址，默认 `0.0.0.0` |
+| `VSPHERE_AUTO_KEY` | 外置 Fernet 密钥（默认自动生成 `state/.fernet.key`，**请备份，丢失则已存密码不可恢复**） |
+| `VSPHERE_PASSWORD` | CLI/Web 未用已存凭据时的 vCenter 密码 |
+| `VSPHERE_DEBUG` | `1` 开启调试日志（强制仅本机监听） |
 
 ---
 
-## Running as a Service (Linux)
+## 常见问题
 
-```bash
-sudo cp systemd/vsphere-auto.service /etc/systemd/system/
-sudoedit /etc/systemd/system/vsphere-auto.service  # adjust User / WorkingDirectory / ExecStart paths
-sudo systemctl daemon-reload
-sudo systemctl enable --now vsphere-auto
-sudo systemctl status vsphere-auto
-journalctl -u vsphere-auto -f
-```
+**连接 vCenter 失败（尤其 6.7）？**
+先 `vsphere-auto creds test <名称>` 看具体错误。6.7 老主机的 TLS 1.0/legacy cipher 问题客户端已自动降级处理；仍失败时检查 443 可达性（`curl -vk https://<vc>:443/sdk`）和代理/防火墙。`VSPHERE_DEBUG=1 bash start.sh` 可看完整堆栈。
 
-Or let the installer do it (best-effort; substitutes paths automatically):
+**静态 IP / 主机名没有生效？**
+确认模板内 VMware Tools 在运行；cloud-init 模板需按上文禁用其网络配置。DHCP 部署不做任何注入，属正常。
 
-```bash
-sudo bash install.sh --install-service
-```
+**直连 ESXi 时发现结果里 DC/clusters 为 0？**
+正常现象——ESXi 无数据中心/集群概念，直接选择主机和数据存储即可。
 
-The unit runs as `User=vsphereauto` (create it first or adjust `User=`/`Group=`), sets `VSPHERE_STATE_DIR=/opt/vsphere-auto/state`, restarts on failure after 5 seconds, and binds to `0.0.0.0` (all interfaces) — restrict to loopback via `systemctl edit` if you only need local access.
-
-Docker: **not yet provided** — there is no Dockerfile in the repository at the moment. Run directly with `install.sh` + `start.sh` or the systemd unit above.
+**如何轮换密码？**
+设置页编辑凭据填入新密码（留空保持不变），或 `vsphere-auto creds update <id> --password '***'`。
 
 ---
 
-## Idempotency & Robustness
+## License
 
-- **Idempotency key** `specHash = sha256(normalizedSpec)` — re-running with the same spec skips unchanged VMs (reported as `skipped` in the batch summary). Auto-assigned IPs are excluded from the hash so pool drift cannot break idempotency.
-- **State** in `state/batch.db` (SQLite, race-safe batch id allocation) — existing VMs are looked up by `vmName + folder` before cloning; stale `running`/`pending` rows left by a crash are marked `interrupted` on the next startup (`recover_interrupted`), so a re-run starts clean instead of colliding.
-- **IP pool safety:** auto-allocated leases are persisted to `state/ip_pools.json`; pool exhaustion aborts the plan with a clear error and already-taken leases are rolled back — no half-planned batches.
-- **Robustness:** vCenter connections use `tenacity` retry with backoff, vCenter task errors are classified with readable messages, `SIGINT/SIGTERM` stop batches gracefully, and secrets are redacted in logs, state and inventory.
+本项目采用 **[MIT License](LICENSE)** —— 可自由使用、修改、商用、再分发，唯一要求是保留原始版权与许可声明（无担保条款）。
 
----
+第三方依赖均为宽松许可证，与本项目 MIT 兼容，无传染性（ copyleft）问题，商用无需额外授权：
 
-## Security
-
-- **Default bind address is `0.0.0.0`** — the UI/API are reachable from other hosts out of the box. Set `--host 127.0.0.1`, `VSPHERE_HOST=127.0.0.1`, or edit the systemd unit to restrict to loopback.
-- **Set `VSPHERE_API_TOKEN` when the service is reachable from other hosts** — without it the API is unauthenticated (a loud warning is printed at startup in that case). When the token is set, requests must send it as `Authorization: Bearer <token>` (or `X-API-Token: <token>`). The Web UI handles this automatically: on the first `401` the browser prompts for the token, remembers it in `localStorage`, and retries — CLI/API callers pass the header explicitly:
-  ```bash
-  curl -H "X-API-Token: $VSPHERE_API_TOKEN" http://<host>:8080/api/health
-  ```
-- **Use a reverse proxy** (nginx/caddy with TLS + auth) in front of port 8080 for any non-loopback access, and restrict with firewalld:
-  ```bash
-  firewall-cmd --add-port=8080/tcp --permanent && firewall-cmd --reload
-  ```
-- **TLS certificate verification is currently disabled** for vCenter connections — a compatibility measure for vSphere 6.7's self-signed certificates. Do not rely on the transport layer for confidentiality against active attackers on the vCenter path; keep the management network trusted.
-- Passwords are encrypted with Fernet and stored in `state/creds.db`. The key is resolved as `VSPHERE_AUTO_KEY` env var > `state/.fernet.key` (0600, auto-generated on first run). Back up `state/.fernet.key` — losing it makes saved passwords unrecoverable.
-- The API returns `hasPassword` instead of the raw value; logs, batch state and inventory are redacted (`***` for secret-looking keys).
-
----
-
-## Environment Variables
-
-| Variable | Purpose | Default |
-|----------|---------|---------|
-| `VSPHERE_STATE_DIR` | Directory holding all runtime state (`creds.db`, `batch.db`, `ip_pools.json`, `inventory.json`, `.fernet.key`). `start.sh` defaults it to `<repo>/state` so manual starts and systemd share one state dir. | `<repo>/state` |
-| `VSPHERE_AUTO_KEY` | Fernet key used to encrypt stored credentials. Overrides `state/.fernet.key`; set it when using an external secret store or a shared state dir. | auto-generated key file |
-| `VSPHERE_API_TOKEN` | When set, all API requests must present this token (`Authorization: Bearer …` / `X-API-Token`). Required before exposing the UI beyond loopback. | unset (no auth) |
-| `VSPHERE_HOST` | Bind address for `start.sh`, passed through to `serve --host`. The `serve` CLI default itself is fixed at `0.0.0.0`; use `--host` to override per-invocation. | `0.0.0.0` |
-| `VSPHERE_PASSWORD` | vCenter password for CLI/Web flows that don't use saved credentials. | unset |
-| `VSPHERE_PASSWORD_FILE` | Alternative to `VSPHERE_PASSWORD`: read the password from this file. | unset |
-| `VSPHERE_DEBUG` | `1`/`true` enables Flask debug mode + DEBUG logging (same as `serve --debug`). Debug mode forces loopback binding. | unset |
-| `LOG_LEVEL` | Log level override (`DEBUG`, `INFO`, …). | `INFO` (`DEBUG` with debug mode) |
-
----
-
-## Troubleshooting
-
-**Cannot connect to vCenter?** Run `vsphere-auto creds test <name>` and check the output. Untrusted certificates are skipped by default; you can configure a CA if needed. Some `CustomizationSpec` features are unavailable with direct ESXi connections — the tool falls back automatically.
-
-**Discover shows "Failed" or "no feedback" (especially vSphere 6.7):** The Deploy page now prints the exact error. Common causes on **6.7.0 (e.g. 6.7.0.42000)**:
-  1. **TLS / cipher mismatch** — Old hosts negotiate TLS 1.0/1.1 or legacy ciphers blocked by Python 3.11 + OpenSSL 3.x. The client now lowers `SECLEVEL` to 1 and allows TLS 1.0+ automatically; if you still see `SSL: ...` or `handshake failed`, verify the host is reachable on `443` (`curl -vk https://<vc>:443/sdk`) and not blocked by a proxy/firewall.
-  2. **Wrong credential / port** — On the deploy page pick the saved credential (dropdown) and watch the status line; it will show `Failed: <reason>` instead of staying blank. Or run `vsphere-auto creds test <name>` from the CLI — it prints the same error.
-  3. **ESXi direct (no vCenter)** — `datacenters` will be `0` even on success; clusters/networks may be empty. The `summary` line in the status bar (`DC:0 clusters:0 ...`) is expected.
-  Re-run with `VSPHERE_DEBUG=1 bash start.sh` to get full stack traces in the server log.
-
-**ISO scan is slow?** Scanning large datastores is paginated/cached and not run on every `discover`. You can also skip scanning by setting `iso: "[datastore] path/to.iso"` directly.
-
-**How do I rotate a password?** Edit the credential in the Settings page and enter a new password, or run `vsphere-auto creds update <id> --password '***'`. Omitting the flag keeps the current value.
-
----
-
-## Project Layout
-
-```
-.
-├── pyproject.toml
-├── config/config.example.yaml
-├── install.sh / start.sh
-├── systemd/vsphere-auto.service
-├── src/vsphere_auto/
-│   ├── cli.py / web/app.py
-│   ├── creds/  vsphere/  batch/  net/  utils/
-│   └── web/templates/  web/static/
-└── state/  # runtime (gitignored): creds.db / batch.db / inventory.json / .fernet.key
-```
-
----
-
-## Development & Verification
-
-```bash
-pip install -e .          # or: uv sync
-python -m vsphere_auto --help
-vsphere-auto creds list
-vsphere-auto plan --config config/config.example.yaml  # dry run without a vCenter
-pytest                    # mock pyVmomi tests (to be added)
-```
+| 依赖 | 许可证 |
+|------|--------|
+| pyvmomi, requests, cryptography | Apache-2.0（cryptography 为 Apache-2.0 / BSD-3 双许可） |
+| flask, jinja2 | BSD-3-Clause |
+| waitress | Zope Public License 2.1 (ZPL-2.1) |
+| pyyaml, pydantic, typer, rich, tenacity, hatchling | MIT |
