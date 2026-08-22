@@ -245,7 +245,7 @@ def _folder_by_path(content, vm_folder_root, folder_name: str, vim):
             return True
 
     current = [vm_folder_root]
-    for part in parts:
+    for seg_idx, part in enumerate(parts):
         candidates: list = []
         for node in current:
             try:
@@ -253,6 +253,10 @@ def _folder_by_path(content, vm_folder_root, folder_name: str, vim):
             except AttributeError:
                 continue
             candidates += [c for c in list(children) if isinstance(c, vim.Folder)]
+        if seg_idx == 0:
+            # The vmFolder root itself is a Folder (often literally named 'vm')
+            # and appears in folder listings — but never in its own childEntity.
+            candidates.append(vm_folder_root)
         if not candidates:
             return None
         names = _bulk_names(content, candidates)
