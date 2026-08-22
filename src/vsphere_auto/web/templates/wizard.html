@@ -53,13 +53,14 @@
   </fieldset>
 
   <fieldset class="wizFieldset">
-    <legend data-i18n="wiz.place">放置位置（可选，默认自动选择）</legend>
+    <legend data-i18n="wiz.place">放置位置（存储与宿主机必选）</legend>
     <div class="grid2">
-      <label><span class="lbl" data-i18n="idx.ds.label">数据存储（留空 = 自动选剩余空间最大）</span><select id="wDatastore"><option value="" data-i18n="idx.ds.auto">auto（自动选择）</option></select></label>
-      <label><span class="lbl" data-i18n="idx.folder.label">文件夹（如 workloads/demo）</span><input id="wFolder"></label>
+      <label><span class="lbl" data-i18n="wiz.ds.label">数据存储（必选）</span><select id="wDatastore"></select></label>
+      <label><span class="lbl" data-i18n="wiz.host.sel">宿主机（必选）</span><select id="wHostSel"></select></label>
+      <label><span class="lbl" data-i18n="wiz.folder.label">文件夹（可选，下拉选择或输入）</span><input id="wFolder" list="wFolderList"><datalist id="wFolderList"></datalist></label>
       <label><span class="lbl" data-i18n="idx.network">网络</span><select id="wNetwork"><option value="">auto</option></select></label>
-      <label><span class="lbl" data-i18n="idx.e.host">宿主机（可选）</span><input id="wHost" data-i18n-ph="idx.e.host.ph" placeholder="留空 = 自动放置"></label>
     </div>
+    <div id="placeWarn"></div>
   </fieldset>
 </section>
 
@@ -168,6 +169,16 @@ function validateStep(n){
       document.getElementById('isoStatus').appendChild(badge('err', t(src==='tpl'?'wiz.tpl.need':'wiz.iso.need')));
       return false;
     }
+    if(!document.getElementById('wDatastore').value || !document.getElementById('wHostSel').value){
+      const box=document.getElementById('placeWarn');
+      box.innerHTML='';
+      box.appendChild(badge('warn', t('wiz.place.need')));
+      return false;
+    }
+    placeCheck();
+    // host cannot see the datastore -> block, deployment would surely fail
+    if(!document.querySelector('#placeWarn .badge.err')) return true;
+    return false;
   }
   if(n===3){
     const naming=document.getElementById('wNaming').value;
@@ -244,8 +255,57 @@ function fillSelects(){
     .map(d=>[d.name, `${d.name}（${t('d.free')} ${gb(d.freeSpace)}）`]);
   refill('wTemplate',[['',t('idx.tpl.opt')]].concat(tpls));
   refill('wNetwork',[['','auto']].concat(nets));
-  refill('wDatastore',[['',t('idx.ds.auto')]].concat(dss));
+  // manual-first: no "auto" option — the user picks a datastore and host
+  refill('wDatastore', dss);
+  fillHostSelect();
+  const fl=document.getElementById('wFolderList');
+  if(fl){ fl.innerHTML=''; (inventory.vmFolders||[]).forEach(p=>{ const o=el('option'); o.value=p; fl.appendChild(o); }); }
   refill('wIsoDs', dss.length?dss:[['','']]);
+}
+function fillHostSelect(){
+  const sel=document.getElementById('wHostSel');
+  if(!sel || !inventory) return;
+  const v=sel.dataset.pendingVal||sel.value;
+  sel.innerHTML='';
+  const groups=(inventory.clusters||[]).map(c=>[c.name, c.hosts||[]]);
+  const standalone=(inventory.standaloneHosts||[]);
+  if(standalone.length) groups.push([t('d.standalone'), standalone]);
+  let total=0;
+  groups.forEach(([gname, hosts])=>{
+    if(!hosts.length) return;
+    const og=document.createElement('optgroup'); og.label=gname;
+    hosts.forEach(h=>{ const o=el('option','',h.name+(h.datastores&&h.datastores.length?'':' · ⚠')); o.value=h.name; og.appendChild(o); total++; });
+    sel.appendChild(og);
+  });
+  try{ sel.value=v; }catch(e){}
+  delete sel.dataset.pendingVal;
+  return total;
+}
+/* placement pre-checks: host must see the datastore; datastore space must
+   plausibly fit the requested disks. Purely advisory — server re-validates. */
+function placeCheck(){
+  const box=document.getElementById('placeWarn');
+  box.innerHTML='';
+  const dsName=document.getElementById('wDatastore').value;
+  const hostName=document.getElementById('wHostSel').value;
+  if(!dsName || !hostName) return;
+  let host=null;
+  (inventory.clusters||[]).forEach(c=>(c.hosts||[]).forEach(h=>{ if(h.name===hostName) host=h; }));
+  (inventory.standaloneHosts||[]).forEach(h=>{ if(h.name===hostName) host=h; });
+  if(host && Array.isArray(host.datastores) && !host.datastores.includes(dsName)){
+    box.appendChild(badge('err', t('wiz.warn.hostds')));
+    box.appendChild(document.createElement('br'));
+  }
+  const diskGB=parseInt(document.getElementById('wDisk').value,10)||0;
+  const count=Math.max(1, parseInt(document.getElementById('wCount').value,10)||1);
+  const ds=(inventory.datastores||[]).find(d=>d.name===dsName);
+  if(ds && diskGB>0){
+    const need=diskGB*count, free=(Number(ds.freeSpace)||0)/1024**3;
+    if(need>free){
+      box.appendChild(badge('warn', t('wiz.warn.space',{need:need.toFixed(0),free:free.toFixed(0)})));
+      box.appendChild(document.createElement('br'));
+    }
+  }
 }
 function refill(id, opts){
   const s=document.getElementById(id);
@@ -306,7 +366,7 @@ function wizCfg(){
   const guest=document.getElementById('wGuest').value.trim();
   const ds=document.getElementById('wDatastore').value;
   const folder=document.getElementById('wFolder').value.trim();
-  const hostName=document.getElementById('wHost').value.trim();
+  const hostName=document.getElementById('wHostSel').value.trim();
 
   const vms=[];
   for(let i=1;i<=count;i++){
@@ -357,7 +417,7 @@ function renderPlan(j){
     tr.appendChild(el('td','',srcTxt));
     tr.appendChild(el('td','',`${vm.cpu??''} / ${vm.memoryMB??''} / ${vm.diskGB??''}`));
     tr.appendChild(el('td','',nets));
-    const place=[document.getElementById('wDatastore').value, document.getElementById('wFolder').value.trim(), document.getElementById('wHost').value.trim()].filter(Boolean).join(' / ');
+    const place=[document.getElementById('wDatastore').value, document.getElementById('wFolder').value.trim(), document.getElementById('wHostSel').value].filter(Boolean).join(' / ');
     tr.appendChild(el('td','', place||'auto'));
     tb.appendChild(tr);
   });
@@ -423,7 +483,7 @@ function saveState(){
       ds:document.getElementById('wDatastore').value,
       folder:document.getElementById('wFolder').value,
       network:document.getElementById('wNetwork').value,
-      host:document.getElementById('wHost').value,
+      host:document.getElementById('wHostSel').value,
       count:document.getElementById('wCount').value,
       naming:document.getElementById('wNaming').value,
       concurrency:document.getElementById('wConcurrency').value,
@@ -455,7 +515,7 @@ function applySaved(){
     if(st.src){ const r=document.querySelector(`input[name=wizSrc][value=${st.src}]`); if(r) r.checked=true; }
     syncSourcePanels();
     const m={'wTemplate':st.tpl,'wIsoDs':st.isoDs,'wIso':st.iso,'wDatastore':st.ds,'wFolder':st.folder,
-             'wNetwork':st.network,'wHost':st.host,'wCount':st.count,'wNaming':st.naming,
+             'wNetwork':st.network,'wHostSel':st.host,'wCount':st.count,'wNaming':st.naming,
              'wConcurrency':st.concurrency,'wCpu':st.cpu,'wMem':st.mem,'wDisk':st.disk,
              'wProv':st.prov,'wIpMode':st.ipMode,'wNetmask':st.netmask,'wGateway':st.gateway,
              'wDns':st.dns,'wGuest':st.guest};
@@ -482,7 +542,8 @@ document.getElementById('btnPlanW').onclick=doPlanW;
 document.getElementById('btnDeployW').onclick=doDeployW;
 document.querySelectorAll('input[name=wizSrc]').forEach(r=>r.addEventListener('change',()=>{syncSourcePanels();saveState();}));
 document.querySelectorAll('#step1 input,#step2 input,#step2 select,#step3 input,#step3 select').forEach(n=>{
-  n.addEventListener('input',saveState); n.addEventListener('change',saveState);
+  n.addEventListener('input',()=>{saveState();placeCheck();});
+  n.addEventListener('change',()=>{saveState();placeCheck();});
 });
 document.getElementById('btnPrev').onclick=()=>{ if(curStep>1) showStep(curStep-1); };
 document.getElementById('btnNext').onclick=()=>{

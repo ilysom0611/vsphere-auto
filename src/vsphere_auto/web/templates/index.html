@@ -27,7 +27,7 @@
   <h2 data-i18n="idx.s2">2. 部署目标（可选，默认自动）</h2>
   <div class="grid2">
     <label><span class="lbl" data-i18n="idx.ds.label">数据存储（留空 = 自动选剩余空间最大）</span><select id="fDatastore"><option value="" data-i18n="idx.ds.auto">auto（自动选择）</option></select></label>
-    <label><span class="lbl" data-i18n="idx.folder.label">文件夹（如 workloads/demo）</span><input id="fFolder"></label>
+    <label><span class="lbl" data-i18n="idx.folder.label">文件夹（如 workloads/demo）</span><input id="fFolder" list="folderList"><datalist id="folderList"></datalist></label>
   </div>
 </section>
 
@@ -230,6 +230,8 @@ function fillSelects(inv){
   if(bn){ const v=bn.value; bn.innerHTML=''; bn.appendChild(el('option','','auto')).value='auto'; nets.forEach(([v2,t2])=>{const oo=el('option','',t2);oo.value=v2;bn.appendChild(oo);}); bn.value=v; }
   const fd=document.getElementById('fDatastore');
   if(fd){ const v=fd.dataset.pendingVal||fd.value; fd.innerHTML=''; const o=el('option','',t('idx.ds.auto')); o.value=''; fd.appendChild(o); dss.forEach(([v2,t2])=>{const oo=el('option','',t2);oo.value=v2;fd.appendChild(oo);}); try{ fd.value=v; }catch(e){} delete fd.dataset.pendingVal; }
+  const fl=document.getElementById('folderList');
+  if(fl){ fl.innerHTML=''; (inv.vmFolders||[]).forEach(p=>{ const o=el('option'); o.value=p; fl.appendChild(o); }); }
 }
 function fillEntrySelects(entry,tpls,nets){
   const tt=entry.querySelector('.eTemplate');

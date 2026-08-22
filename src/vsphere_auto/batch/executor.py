@@ -126,6 +126,10 @@ def _run_batch_inner(
         try:
             res = deploy_fn(vm)
             ok = bool(res.get("ok"))
+            if not ok and "errorKey" not in res:
+                from ..vsphere.errmap import decorate
+
+                decorate(res, res.get("error"))
             status = "success" if ok else "failed"
             try:
                 upsert_task(task_id, batch_id, name, spec_hash, status, vm, res, state_dir=state_dir)
@@ -136,7 +140,9 @@ def _run_batch_inner(
                 stop_event.set()
             return name, res
         except Exception as e:
-            res = {"ok": False, "error": str(e)}
+            from ..vsphere.errmap import decorate
+
+            res = decorate({"ok": False, "error": str(e)}, e)
             try:
                 upsert_task(task_id, batch_id, name, spec_hash, "failed", vm, res, state_dir=state_dir)
             except Exception as ee:

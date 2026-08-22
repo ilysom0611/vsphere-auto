@@ -60,14 +60,30 @@ function fillTaskRows(list){
     tr.appendChild(td(t.vm_name));
     const st=document.createElement('td'); st.appendChild(statusBadge(t.status)); tr.appendChild(st);
 
-    // Result / error cell: moid or skipped for success, full error text for failures
+    // Result / error cell: moid or skipped for success, actionable hint +
+    // expandable raw error for failures.
     const resTd=document.createElement('td');
     if(result.error){
+      const key=result.errorKey?('err.'+result.errorKey):null;
+      // only translate keys that exist in BOTH dictionaries (server may be
+      // newer than the cached page)
+      const known=key&&window.I18N.zh[key]&&window.I18N.en[key];
+      if(known){
+        resTd.appendChild(badge('err', t('err.hint')));
+        const msg=document.createElement('div');
+        msg.style.marginTop='4px';
+        msg.textContent=t(key);
+        resTd.appendChild(msg);
+      } else {
+        const line=document.createElement('div');
+        line.style.color='#f87171';
+        line.textContent=String(result.error).slice(0,160)+(String(result.error).length>160?'…':'');
+        resTd.appendChild(line);
+      }
       const det=document.createElement('details');
       det.className='rawjson';
       const sum=document.createElement('summary');
-      sum.style.color='#f87171';
-      sum.textContent=String(result.error).slice(0,120)+(String(result.error).length>120?'…':'');
+      sum.textContent=t('err.raw');
       det.appendChild(sum);
       const pre=document.createElement('pre');
       pre.className='pre';

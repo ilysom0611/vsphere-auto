@@ -108,13 +108,13 @@ def _collect_inventory(content, timeout: int = _VIEW_TIMEOUT) -> list[Any]:
     from pyVmomi import vim
 
     type_paths: list[tuple[Any, list[str]]] = [
-        (vim.Datacenter, ["name"]),
+        (vim.Datacenter, ["name", "vmFolder"]),
         (vim.ClusterComputeResource, ["name", "host"]),
         (vim.ComputeResource, ["name", "host"]),
-        (vim.HostSystem, ["name"]),
+        (vim.HostSystem, ["name", "datastore"]),
         (vim.Datastore, _DS_PATHS),
         (vim.Network, ["name"]),
-        (vim.Folder, ["name"]),
+        (vim.Folder, ["name", "parent"]),
         (vim.ResourcePool, ["name"]),
         (vim.VirtualMachine, list(_VM_PATHS)),
     ]
@@ -292,11 +292,29 @@ def discover(si, datacenter: str | None = None) -> dict[str, Any]:
     for oc in grouped.get("HostSystem", []):
         host_names[_moid(oc.obj)] = _props(oc).get("name", "")
 
-    def _host_entries(refs) -> list[dict[str, str]]:
-        entries: list[dict[str, str]] = []
+    # Datastore moid->name and per-host mounted datastore names — the UI uses
+    # these to warn when the chosen host cannot see the chosen datastore
+    # (datastore mounts are PER-HOST on vSphere).
+    ds_names: dict[str, str] = {}
+    for oc in grouped.get("Datastore", []):
+        ds_names[_moid(oc.obj)] = _props(oc).get("name", "")
+    host_dss: dict[str, list[str]] = {}
+    for oc in grouped.get("HostSystem", []):
+        props = _props(oc)
+        names = [ds_names.get(getattr(r, "_moId", ""), "") for r in (props.get("datastore") or [])]
+        host_dss[_moid(oc.obj)] = sorted(n for n in names if n)
+
+    def _host_entries(refs) -> list[dict[str, Any]]:
+        entries: list[dict[str, Any]] = []
         for h in refs or []:
             mid = getattr(h, "_moId", "")
-            entries.append({"name": host_names.get(mid, "") or getattr(h, "name", ""), "moid": mid})
+            entries.append(
+                {
+                    "name": host_names.get(mid, "") or getattr(h, "name", ""),
+                    "moid": mid,
+                    "datastores": host_dss.get(mid, []),
+                }
+            )
         return entries
 
     # Datacenters — present on vCenter; ESXi direct may report 0
@@ -321,7 +339,7 @@ def discover(si, datacenter: str | None = None) -> dict[str, Any]:
     # Standalone hosts: ComputeResource on vCenter includes clusters as subclass;
     # filter by exact type name so we only keep standalone hosts.
     result["standaloneHosts"] = [
-        {"name": _props(oc).get("name", ""), "moid": _moid(oc.obj)}
+        {"name": _props(oc).get("name", ""), "moid": _moid(oc.obj), "datastores": host_dss.get(_moid(oc.obj), [])}
         for oc in grouped.get("ComputeResource", [])
         if _type_name(getattr(oc, "obj", None)) == "ComputeResource"
     ]
@@ -344,6 +362,37 @@ def discover(si, datacenter: str | None = None) -> dict[str, Any]:
     result["networks"] = [{"name": _props(oc).get("name", ""), "moid": _moid(oc.obj)} for oc in grouped.get("Network", [])]
 
     result["folders"] = [{"name": _props(oc).get("name", ""), "moid": _moid(oc.obj)} for oc in grouped.get("Folder", [])]
+
+    # VM folder paths ('/'-separated, relative to each datacenter's vmFolder).
+    # The flat `folders` list above mixes in system folders from the DC /
+    # datastore / network / host trees, so the UI cannot offer it as a
+    # dropdown — this derived path list can. Restricted appliances may reject
+    # parent/vmFolder (dropped by the retrieval retry logic): the list then
+    # stays empty and the UI falls back to free-text entry.
+    folder_meta: dict[str, tuple[str, str]] = {}  # moid -> (name, parent moid)
+    for oc in grouped.get("Folder", []):
+        props = _props(oc)
+        par = props.get("parent")
+        folder_meta[_moid(oc.obj)] = (props.get("name", ""), getattr(par, "_moId", "") if par is not None else "")
+    children_of: dict[str, list[str]] = {}
+    for mid, (_nm, par_mid) in folder_meta.items():
+        children_of.setdefault(par_mid, []).append(mid)
+    vm_folder_roots: set[str] = set()
+    for oc in grouped.get("Datacenter", []):
+        vf = _props(oc).get("vmFolder")
+        if vf is not None:
+            vm_folder_roots.add(getattr(vf, "_moId", ""))
+    vm_folder_paths: set[str] = set()
+    for root_moid in vm_folder_roots:
+        stack = [(mid, folder_meta[mid][0]) for mid in children_of.get(root_moid, [])]
+        while stack:
+            mid, path = stack.pop()
+            if path:
+                vm_folder_paths.add(path)
+            for cmid in children_of.get(mid, []):
+                cname = folder_meta[cmid][0]
+                stack.append((cmid, f"{path}/{cname}" if path else cname))
+    result["vmFolders"] = sorted(vm_folder_paths)
 
     result["resourcePools"] = [
         {"name": _props(oc).get("name", ""), "moid": _moid(oc.obj)} for oc in grouped.get("ResourcePool", [])
