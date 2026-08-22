@@ -380,6 +380,12 @@ window.I18N = {
   // Toggle button lives in the nav; switching reloads so all dynamically
   // rendered content regenerates in the new language.
   document.addEventListener("DOMContentLoaded", function () {
+    // Highlight the nav link matching the current path (e.g. "/tasks").
+    var here = location.pathname.replace(/\/+$/, "") || "/";
+    document.querySelectorAll(".nav a").forEach(function (a) {
+      var href = a.getAttribute("href").replace(/\/+$/, "") || "/";
+      if (href === here) a.classList.add("active");
+    });
     var btn = document.getElementById("langToggle");
     if (!btn) return;
     btn.onclick = function () {
