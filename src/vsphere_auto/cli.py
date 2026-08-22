@@ -297,6 +297,10 @@ def deploy(config: str = typer.Option(..., "--config", "-c", help="Config YAML p
                         clone_kwargs["network"] = network_name
                 except (TypeError, ValueError):
                     pass
+                if vm.get("resourcePool"):
+                    clone_kwargs["resource_pool"] = vm["resourcePool"]
+                if vm.get("provisioning"):
+                    clone_kwargs["provisioning"] = vm["provisioning"]
                 task = clone_from_template(si, template, name, vc.get("datacenter"), vc.get("cluster") if vc.get("cluster") != "auto" else None, vc.get("datastore") if vc.get("datastore") != "auto" else None, folder, cpu=cpu, memory_mb=mem, disk_gb=int(vm.get("diskGB")) if vm.get("diskGB") is not None else None, customization_spec=custom, **clone_kwargs)
                 res = wait_for_task(task, timeout=1800)
                 return {"ok": res["state"] == "success", "error": res.get("error")}

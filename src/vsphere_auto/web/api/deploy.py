@@ -297,11 +297,13 @@ def _deploy_after_expand(cfg: dict[str, Any], vms: list, consumed: list[str]):
                     cluster=vc_cluster if vc_cluster != "auto" else None,
                     datastore=vc_datastore if vc_datastore != "auto" else None,
                     folder_name=folder,
+                    resource_pool=vm.get("resourcePool"),
                     cpu=cpu,
                     memory_mb=mem,
                     disk_gb=int(disk) if disk is not None else None,
                     customization_spec=custom,
                     network=network_name,
+                    provisioning=vm.get("provisioning"),
                 )
                 from ...vsphere.tasks import wait_for_task
 

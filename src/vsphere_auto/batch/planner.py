@@ -14,6 +14,14 @@ log = logging.getLogger(__name__)
 
 _RFC1123_LABEL = re.compile(r"[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?")
 
+# Per-VM spec keys recognised at config top level and in defaults — a count-
+# generated batch inherits these; explicit vms[] entries inherit them from
+# defaults for any key they do not set themselves.
+_VM_SPEC_KEYS = (
+    "template", "iso", "cpu", "memoryMB", "diskGB", "networks",
+    "folder", "guestId", "provisioning", "resourcePool",
+)
+
 
 def validate_hostname(name: str) -> None:
     """Guest hostnames must be single RFC1123 labels (vCenter LinuxPrep rejects
@@ -72,6 +80,7 @@ def expand_batch(cfg: dict[str, Any], persist: bool = False) -> list[dict[str, A
     batch_cfg = cfg.get("batch") or {}
     naming = batch_cfg.get("naming")
     ip_pool = cfg.get("ipPool") or {}
+    defaults = cfg.get("defaults") or {}
 
     # If vms empty but count provided, generate
     if not vms and cfg.get("count") is not None:
@@ -84,9 +93,17 @@ def expand_batch(cfg: dict[str, Any], persist: bool = False) -> list[dict[str, A
         if count > 1000:
             raise ValueError(f"count too large (max 1000): {count}")
         template = cfg.get("template") or (cfg.get("defaults") or {}).get("template") or ""
+        # carry the top-level spec (cpu/memoryMB/diskGB/networks/iso/...) into
+        # every generated VM — previously only name+template survived, so a
+        # count-based request silently deployed 2 CPU/4 GB template defaults.
+        base_spec = {k: copy.deepcopy(v) for k, v in cfg.items() if k in _VM_SPEC_KEYS}
+        if template:
+            base_spec["template"] = template
         vms = []
         for i in range(1, count + 1):
-            vms.append({"name": _format_name(naming, i), "template": template})
+            entry = copy.deepcopy(base_spec)
+            entry["name"] = _format_name(naming, i)
+            vms.append(entry)
 
     expanded: list[dict[str, Any]] = []
     seen_names: set[str] = set()
@@ -99,6 +116,11 @@ def expand_batch(cfg: dict[str, Any], persist: bool = False) -> list[dict[str, A
     try:
         for vm in vms:
             vm = copy.deepcopy(vm)
+            # fill unset spec keys from defaults (explicit vms[] entries keep
+            # their own values; count-generated entries already carry them)
+            for key in _VM_SPEC_KEYS:
+                if key not in vm and key in (defaults or {}):
+                    vm[key] = copy.deepcopy(defaults[key])
             # hash source BEFORE IP injection: auto-assigned IPs must not enter
             # the spec hash (pool drift would break idempotency), explicit
             # user-declared IPs stay included.
