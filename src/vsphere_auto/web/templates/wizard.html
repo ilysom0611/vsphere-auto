@@ -292,7 +292,8 @@ function placeCheck(){
   let host=null;
   (inventory.clusters||[]).forEach(c=>(c.hosts||[]).forEach(h=>{ if(h.name===hostName) host=h; }));
   (inventory.standaloneHosts||[]).forEach(h=>{ if(h.name===hostName) host=h; });
-  if(host && Array.isArray(host.datastores) && !host.datastores.includes(dsName)){
+  // empty/missing mount list = unknown on restricted appliances -> no warning
+  if(host && Array.isArray(host.datastores) && host.datastores.length>0 && !host.datastores.includes(dsName)){
     box.appendChild(badge('err', t('wiz.warn.hostds')));
     box.appendChild(document.createElement('br'));
   }

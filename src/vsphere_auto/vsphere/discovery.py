@@ -111,7 +111,7 @@ def _collect_inventory(content, timeout: int = _VIEW_TIMEOUT) -> list[Any]:
         (vim.Datacenter, ["name", "vmFolder"]),
         (vim.ClusterComputeResource, ["name", "host"]),
         (vim.ComputeResource, ["name", "host"]),
-        (vim.HostSystem, ["name", "datastore"]),
+        (vim.HostSystem, ["name", "datastore", "parent"]),
         (vim.Datastore, _DS_PATHS),
         (vim.Network, ["name"]),
         (vim.Folder, ["name", "parent"]),
@@ -294,7 +294,9 @@ def discover(si, datacenter: str | None = None) -> dict[str, Any]:
 
     # Datastore moid->name and per-host mounted datastore names — the UI uses
     # these to warn when the chosen host cannot see the chosen datastore
-    # (datastore mounts are PER-HOST on vSphere).
+    # (datastore mounts are PER-HOST on vSphere). Keyed by BOTH the HostSystem
+    # moid and its parent ComputeResource moid: standalone hosts appear in the
+    # inventory as ComputeResource objects whose moid differs from the host's.
     ds_names: dict[str, str] = {}
     for oc in grouped.get("Datastore", []):
         ds_names[_moid(oc.obj)] = _props(oc).get("name", "")
@@ -302,7 +304,12 @@ def discover(si, datacenter: str | None = None) -> dict[str, Any]:
     for oc in grouped.get("HostSystem", []):
         props = _props(oc)
         names = [ds_names.get(getattr(r, "_moId", ""), "") for r in (props.get("datastore") or [])]
-        host_dss[_moid(oc.obj)] = sorted(n for n in names if n)
+        mounts = sorted(n for n in names if n)
+        mid = _moid(oc.obj)
+        host_dss[mid] = mounts
+        par = props.get("parent")
+        if par is not None:
+            host_dss.setdefault(getattr(par, "_moId", ""), mounts)
 
     def _host_entries(refs) -> list[dict[str, Any]]:
         entries: list[dict[str, Any]] = []
