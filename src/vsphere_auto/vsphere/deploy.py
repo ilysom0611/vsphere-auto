@@ -168,10 +168,29 @@ def _collect_resource_pools(content, host_root) -> list:
     return out
 
 
-def _pick_standalone_host(content, host_root, vim):
+def _host_sees_datastore(h, datastore_name: str | None) -> bool:
+    """True when the host has the datastore mounted (or no constraint given).
+
+    A CloneVM lands on this host — if it cannot read the template's datastore
+    the task fails with 'Unable to access file [...]'.  Datastore mounts are
+    per-host, so placement must check host.datastore.
+    """
+    if not datastore_name:
+        return True
+    try:
+        return any(getattr(d, "name", None) == datastore_name for d in (getattr(h, "datastore", []) or []))
+    except Exception:
+        return True  # unfilterable — let vCenter decide rather than excluding everything
+
+
+def _pick_standalone_host(content, host_root, vim, datastore_name: str | None = None):
     """Placement fallback for cluster-less datacenters: the eligible connected
-    non-maintenance standalone host running fewest VMs, with its root pool."""
+    non-maintenance standalone host running fewest VMs, with its root pool.
+
+    When *datastore_name* is given, prefer hosts that have it mounted; hosts
+    without access are only used when nobody else qualifies."""
     best = None
+    fallback = None
     for cr in _collect_objs(content, host_root, [vim.ComputeResource]):
         if isinstance(cr, vim.ClusterComputeResource):
             continue
@@ -186,16 +205,23 @@ def _pick_standalone_host(content, host_root, vim):
                 load = len(list(getattr(h, "vm", []) or []))
             except Exception:
                 load = 0
-            if best is None or load < best[0]:
-                best = (load, h, rp)
-    if best is None:
+            entry = (load, h, rp)
+            if _host_sees_datastore(h, datastore_name):
+                if best is None or load < best[0]:
+                    best = entry
+            elif fallback is None or load < fallback[0]:
+                fallback = entry
+    winner = best or fallback
+    if winner is None:
         return None, None
-    return best[1], best[2]
+    return winner[1], winner[2]
 
 
-def _pick_host(cluster_obj, vim):
+def _pick_host(cluster_obj, vim, datastore_name: str | None = None):
     """Choose (host|None) for placement: DRS-enabled clusters delegate to
-    vCenter (None); otherwise the eligible host running fewest VMs wins."""
+    vCenter (None); otherwise the eligible host running fewest VMs wins.
+    Hosts without access to *datastore_name* are only used when nobody else
+    qualifies (a clone cannot read the template from a host lacking the mount)."""
     try:
         drs_enabled = bool(
             getattr(getattr(cluster_obj, "configurationEx", None), "drsConfig", None)
@@ -215,16 +241,20 @@ def _pick_host(cluster_obj, vim):
         return not bool(getattr(runtime, "inMaintenanceMode", False))
 
     candidates = []
+    fallback = []
     for h in list(getattr(cluster_obj, "host", []) or []):
         try:
-            if _eligible(h):
-                candidates.append((len(list(getattr(h, "vm", []) or [])), h))
+            if not _eligible(h):
+                continue
+            entry = (len(list(getattr(h, "vm", []) or [])), h)
+            (candidates if _host_sees_datastore(h, datastore_name) else fallback).append(entry)
         except Exception:
             continue
-    if not candidates:
+    pool = candidates or fallback
+    if not pool:
         return None
-    candidates.sort(key=lambda t: t[0])
-    return candidates[0][1]
+    pool.sort(key=lambda t: t[0])
+    return pool[0][1]
 
 
 def _folder_by_path(content, vm_folder_root, folder_name: str, vim):
@@ -481,6 +511,15 @@ def clone_from_template(
     if tpl is None:
         raise ValueError(f"Template {template_name!r} not found"
                          + (f" in datacenter {datacenter!r}" if datacenter else ""))
+    # Datastore hosting the template's files ('[dsName] path/file.vmtx') — the
+    # placement host must have it mounted or CloneVM fails to read the source.
+    tpl_ds_name = None
+    try:
+        vm_path = getattr(getattr(getattr(tpl, "config", None), "files", None), "vmPathName", "") or ""
+        if vm_path.startswith("[") and "]" in vm_path:
+            tpl_ds_name = vm_path[1:vm_path.index("]")]
+    except Exception:
+        tpl_ds_name = None
 
     # Destination folder: default = template's parent, else dc.vmFolder/root
     dest_folder = getattr(tpl, "parent", None) or (getattr(dc, "vmFolder", None) if dc else content.rootFolder)
@@ -511,7 +550,7 @@ def clone_from_template(
     if cluster:
         cl_objs = _collect_objs(content, host_root, [vim.ClusterComputeResource])
         cl = _require_first([c for c in cl_objs if getattr(c, "name", None) == cluster], "cluster", cluster)
-        chosen = _pick_host(cl, vim)
+        chosen = _pick_host(cl, vim, datastore_name=tpl_ds_name)
         if chosen is not None:
             relocate.host = chosen
         if relocate.pool is None:
@@ -520,7 +559,7 @@ def clone_from_template(
     elif relocate.pool is None:
         # Cluster-less datacenter (standalone hosts only): pick the least-loaded
         # connected host and its root pool, otherwise CloneVM has no placement.
-        chosen, pool = _pick_standalone_host(content, host_root, vim)
+        chosen, pool = _pick_standalone_host(content, host_root, vim, datastore_name=tpl_ds_name)
         if chosen is not None:
             relocate.host = chosen
         if pool is not None:
