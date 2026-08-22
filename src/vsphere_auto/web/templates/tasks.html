@@ -6,10 +6,27 @@
   <button id="btnRefresh" data-i18n="common.refresh">刷新</button>
   <span id="status" class="muted"></span>
 </div>
+<h2 data-i18n="task.filters">筛选</h2>
+<div class="row" id="filterBar">
+  <input id="fKw" type="text" data-i18n-ph="task.filter.kw" placeholder="名称 / 批次ID">
+  <select id="fStatus">
+    <option value="" data-i18n="task.filter.all">全部状态</option>
+    <option value="pending">pending</option>
+    <option value="running">running</option>
+    <option value="success">success</option>
+    <option value="failed">failed</option>
+    <option value="partial">partial</option>
+    <option value="interrupted">interrupted</option>
+    <option value="skipped">skipped</option>
+  </select>
+  <label class="muted"><span data-i18n="task.filter.from">从</span> <input id="fFrom" type="datetime-local"></label>
+  <label class="muted"><span data-i18n="task.filter.to">到</span> <input id="fTo" type="datetime-local"></label>
+  <button id="btnClearFilters" data-i18n="task.filter.clear">清除筛选</button>
+</div>
 <h2 data-i18n="task.batches">批次</h2>
 <table id="batchTable" class="table"><thead><tr><th data-i18n="task.col.id">ID</th><th data-i18n="task.col.status">状态</th><th data-i18n="task.col.created">创建时间</th><th data-i18n="task.col.actions">操作</th></tr></thead><tbody></tbody></table>
 <h2 data-i18n="task.details">详情</h2>
-<table id="taskTable" class="table"><thead><tr><th data-i18n="task.col.id">ID</th><th data-i18n="task.col.vm">VM</th><th data-i18n="task.col.status">状态</th><th data-i18n="task.col.progress">进度 / 当前操作</th><th data-i18n="task.col.result">结果 / 错误信息</th><th data-i18n="task.col.updated">更新时间</th></tr></thead><tbody></tbody></table>
+<table id="taskTable" class="table"><thead><tr><th data-i18n="task.col.id">ID</th><th data-i18n="task.col.vm">VM</th><th data-i18n="task.col.status">状态</th><th data-i18n="task.col.progress">进度 / 当前操作</th><th data-i18n="task.col.result">结果 / 错误信息</th><th data-i18n="task.col.updated">更新时间</th><th data-i18n="task.col.actions">操作</th></tr></thead><tbody></tbody></table>
 {% endblock %}
 {% block scripts %}
 <script>
@@ -50,10 +67,96 @@ document.querySelector('#batchTable tbody').addEventListener('click', (ev)=>{
   if(!btn) return;
   loadTasks(btn.dataset.id);
 });
-function progressCell(t){
+function badge(kind, text){
+  const b=document.createElement('span');
+  b.className='badge '+kind;
+  b.textContent=text;
+  return b;
+}
+function delButton(kindAttr, id){
+  const btn=document.createElement('button');
+  btn.textContent=t('task.delete');
+  btn.setAttribute('data-'+kindAttr, id);
+  return btn;
+}
+async function delJSON(url){
+  const r=await fetch(url,{method:'DELETE'});
+  let body={}; try{ body=await r.json(); }catch(e){}
+  if(!r.ok) throw new Error(body.error||('HTTP '+r.status));
+  return body;
+}
+
+// ---- filtering (client-side; applies to both tables) ----
+function getFilters(){
+  const kwEl=document.getElementById('fKw');
+  const stEl=document.getElementById('fStatus');
+  if(!kwEl) return {kw:'',st:'',from:null,to:null};
+  const f=document.getElementById('fFrom').value, toV=document.getElementById('fTo').value;
+  return {
+    kw:(kwEl.value||'').trim().toLowerCase(),
+    st:stEl?stEl.value:'',
+    from:f?new Date(f).getTime():null,
+    to:toV?new Date(toV).getTime()+59999:null
+  };
+}
+function rowMatches(f,name,id,status,createdAt){
+  if(f.kw && String(name||'').toLowerCase().indexOf(f.kw)<0 && String(id||'').toLowerCase().indexOf(f.kw)<0) return false;
+  if(f.st && status!==f.st) return false;
+  if((f.from||f.to) && createdAt){
+    const ts=new Date(String(createdAt).replace(' ','T')).getTime();
+    if(!isNaN(ts)){
+      if(f.from && ts<f.from) return false;
+      if(f.to && ts>f.to) return false;
+    }
+  }
+  return true;
+}
+let _batchesRaw=[], _tasksRaw=[], _lastBatch=null;
+
+function renderBatches(){
+  const f=getFilters();
+  const tb=document.querySelector('#batchTable tbody'); tb.innerHTML='';
+  _batchesRaw.forEach(b=>{
+    if(!rowMatches(f,b.id,b.id,b.status,b.created_at)) return;
+    const tr=document.createElement('tr');
+    tr.appendChild(td(b.id));
+    const st=document.createElement('td'); st.appendChild(statusBadge(b.status)); tr.appendChild(st);
+    tr.appendChild(td(b.created_at||''));
+    const actions=document.createElement('td');
+    const viewBtn=document.createElement('button');
+    viewBtn.textContent=t('task.view');
+    viewBtn.dataset.id=b.id;
+    actions.appendChild(viewBtn);
+    if(b.status!=='pending'&&b.status!=='running') actions.appendChild(delButton('del-batch', b.id));
+    tr.appendChild(actions);
+    tb.appendChild(tr);
+  });
+}
+async function loadBatches(){
+  const r=await fetch('/api/batches'); const list=await r.json();
+  _batchesRaw=list||[];
+  renderBatches();
+}
+document.querySelector('#batchTable tbody').addEventListener('click', async (ev)=>{
+  const view=ev.target.closest('button[data-id]');
+  if(view){ loadTasks(view.dataset.id); return; }
+  const del=ev.target.closest('button[data-del-batch]');
+  if(!del) return;
+  const bid=del.getAttribute('data-del-batch');
+  if(!confirm(t('task.delconfirm',{id:bid}))) return;
+  try{
+    await delJSON('/api/batches/'+encodeURIComponent(bid));
+    document.getElementById('status').textContent=t('task.deleted');
+    loadBatches(); loadAllTasks(); _lastBatch=null;
+  }catch(e){
+    document.getElementById('status').textContent=t('task.delfail')+' '+e.message;
+  }
+});
+
+function progressCell(row){
   const c=document.createElement('td');
-  if(t.status!=='running'&&t.status!=='pending'){ c.appendChild(document.createTextNode('—')); return c; }
-  const live=t.live||{};
+  if(row.status!=='running'&&row.status!=='pending'){ c.appendChild(document.createTextNode('—')); return c; }
+  const live=row.live||{};
   const step=live.step||'';
   let txt='';
   if(step==='clone'){
@@ -68,8 +171,8 @@ function progressCell(t){
     txt = t('prog.wait');
   }
   c.appendChild(document.createTextNode(txt));
-  if(t.updated_at){
-    const age=(Date.now()-new Date(t.updated_at.replace(' ','T')))/1000;
+  if(row.updated_at){
+    const age=(Date.now()-new Date(row.updated_at.replace(' ','T')))/1000;
     if(age>180){
       c.appendChild(document.createElement('br'));
       c.appendChild(badge('warn', t('prog.stale',{n:Math.round(age/60)})));
@@ -78,15 +181,18 @@ function progressCell(t){
   return c;
 }
 function fillTaskRows(list){
+  _tasksRaw=list||[];
+  const f=getFilters();
   const tb=document.querySelector('#taskTable tbody'); tb.innerHTML='';
-  list.forEach(t=>{
+  (_tasksRaw).forEach(row=>{
+    if(!rowMatches(f,row.vm_name,row.id,row.status,row.created_at)) return;
     let result={};
-    try{ result=JSON.parse(t.result_json||'{}'); }catch(e){}
+    try{ result=JSON.parse(row.result_json||'{}'); }catch(e){}
     const tr=document.createElement('tr');
-    tr.appendChild(td(t.id));
-    tr.appendChild(td(t.vm_name));
-    const st=document.createElement('td'); st.appendChild(statusBadge(t.status)); tr.appendChild(st);
-    tr.appendChild(progressCell(t));
+    tr.appendChild(td(row.id));
+    tr.appendChild(td(row.vm_name));
+    const st=document.createElement('td'); st.appendChild(statusBadge(row.status)); tr.appendChild(st);
+    tr.appendChild(progressCell(row));
 
     // Result / error cell: moid or skipped for success; failures ALWAYS show
     // the raw error text plus a translated "how to fix" hint when classified.
@@ -119,7 +225,7 @@ function fillTaskRows(list){
       pre.textContent=JSON.stringify(result,null,2)||'(no detail)';
       det.appendChild(pre);
       resTd.appendChild(det);
-    } else if(t.status==='failed'){
+    } else if(row.status==='failed'){
       // failed row with no recorded detail (older batch / crash mid-write)
       resTd.appendChild(badge('err', t('err.hint')));
       const msg=document.createElement('div');
@@ -135,11 +241,15 @@ function fillTaskRows(list){
       resTd.appendChild(document.createTextNode('—'));
     }
     tr.appendChild(resTd);
-    tr.appendChild(td(t.updated_at||''));
+    tr.appendChild(td(row.updated_at||''));
+    const act=document.createElement('td');
+    if(row.status!=='running'&&row.status!=='pending') act.appendChild(delButton('del-task', row.id));
+    tr.appendChild(act);
     tb.appendChild(tr);
   });
 }
 async function loadTasks(batchId){
+  _lastBatch=batchId;
   const r=await fetch('/api/tasks?batch_id='+encodeURIComponent(batchId));
   const list=await r.json();
   fillTaskRows(list);
@@ -149,13 +259,38 @@ async function loadAllTasks(){
   const r=await fetch('/api/tasks'); const list=await r.json();
   fillTaskRows(list);
 }
+document.querySelector('#taskTable tbody').addEventListener('click', async (ev)=>{
+  const del=ev.target.closest('button[data-del-task]');
+  if(!del) return;
+  const tid=del.getAttribute('data-del-task');
+  if(!confirm(t('task.delconfirm',{id:tid}))) return;
+  try{
+    await delJSON('/api/tasks/'+encodeURIComponent(tid));
+    document.getElementById('status').textContent=t('task.deleted');
+    loadAllTasks();
+  }catch(e){
+    document.getElementById('status').textContent=t('task.delfail')+' '+e.message;
+  }
+});
+
+// filter controls re-render both tables from cached raw lists
+['fKw','fStatus','fFrom','fTo'].forEach(id=>{
+  const el=document.getElementById(id);
+  el.addEventListener(el.tagName==='SELECT'?'change':'input', ()=>{ renderBatches(); fillTaskRows(_tasksRaw); });
+});
+document.getElementById('btnClearFilters').onclick=()=>{
+  ['fKw','fFrom','fTo'].forEach(id=>{ document.getElementById(id).value=''; });
+  document.getElementById('fStatus').value='';
+  renderBatches(); fillTaskRows(_tasksRaw);
+};
+
 document.getElementById('btnRefresh').onclick=()=>{ loadBatches(); loadAllTasks(); };
 let _lastActive=false;
 async function pollTick(){
   // While anything is running/pending, refresh everything so progress %,
   // new rows, and final states appear live; otherwise just batch statuses.
   const r=await fetch('/api/tasks'); const list=await r.json();
-  const active=(list||[]).some(t=>t.status==='running'||t.status==='pending');
+  const active=(list||[]).some(x=>x.status==='running'||x.status==='pending');
   fillTaskRows(list);
   if(active||_lastActive) loadBatches();
   _lastActive=active;

@@ -275,3 +275,17 @@ def next_batch_id(state_dir: Path | None = None) -> str:
             n += 1
     finally:
         conn.close()
+
+
+def delete_task(task_id: str, state_dir: Path | None = None) -> bool:
+    """Remove one task row. Refusing running/pending tasks is the API's job."""
+    with _connect(_db_path(state_dir)) as conn:
+        return conn.execute("DELETE FROM tasks WHERE id=?", (task_id,)).rowcount > 0
+
+
+def delete_batch(batch_id: str, state_dir: Path | None = None) -> tuple[int, int]:
+    """Delete a batch and all of its task rows. Returns (tasks, batches) removed."""
+    with _connect(_db_path(state_dir)) as conn:
+        n_tasks = conn.execute("DELETE FROM tasks WHERE batch_id=?", (batch_id,)).rowcount
+        n_batches = conn.execute("DELETE FROM batches WHERE id=?", (batch_id,)).rowcount
+        return n_tasks, n_batches
