@@ -119,15 +119,57 @@ Open `http://<server>:8080` and deploy in 4 steps:
 
 ### CLI (same core engine)
 
+**1. Save a vCenter credential** (one-time per vCenter; supply the password via `--password` or the `VSPHERE_PASSWORD` environment variable — it is stored encrypted):
+
 ```bash
 vsphere-auto creds add --name prod-vc --host 10.0.0.10 --username administrator@vsphere.local
-vsphere-auto creds test prod-vc
-vsphere-auto discover --creds prod-vc                 # discover resources
-cp config/config.example.yaml my.yaml                 # edit your spec
-vsphere-auto plan --config my.yaml --creds prod-vc    # dry-run preview
-vsphere-auto deploy --config my.yaml --creds prod-vc --yes
-vsphere-auto serve --port 8080                        # start the web UI
+vsphere-auto creds test prod-vc     # verify the connection works ("prod-vc" = the name you just saved)
+vsphere-auto creds list             # show all saved credentials
 ```
+
+**2. Discover resources** — see which templates/datastores/hosts/networks are available on that vCenter:
+
+```bash
+vsphere-auto discover --creds prod-vc
+```
+
+**3. Describe what to deploy** in a YAML file:
+
+```bash
+cp config/config.example.yaml my.yaml   # start from the commented example
+# edit my.yaml: VM count & specs, template name, IP mode, naming pattern…
+```
+
+**4. Preview, then deploy**:
+
+```bash
+vsphere-auto plan --config my.yaml --creds prod-vc      # dry run: shows the planned VMs and resource selections, changes nothing
+vsphere-auto deploy --config my.yaml --creds prod-vc --yes   # actually creates the VMs (--yes skips the interactive confirmation)
+```
+
+Or run everything through the web UI instead:
+
+```bash
+vsphere-auto serve --port 8080      # starts the web service at http://localhost:8080
+```
+
+**Command parameters** (values above such as `prod-vc` and `10.0.0.10` are examples — substitute your own):
+
+| Parameter | Used with | Meaning |
+|-----------|-----------|---------|
+| `--name prod-vc` | creds add | A label you invent for this credential, referenced later as `--creds prod-vc` |
+| `--host 10.0.0.10` | creds add | Your vCenter (or ESXi) address — **fill in your real one** |
+| `--username …` | creds add | vSphere account, e.g. `administrator@vsphere.local` — **fill in your real one** |
+| `--password` | creds add | Better to omit: pass the password via the `VSPHERE_PASSWORD` environment variable so it stays out of shell history |
+| `--port 443` | creds add, discover | SDK port; 443 is almost always correct |
+| `--type vcenter` | creds add | `vcenter` (default); use `esxi` when connecting directly to an ESXi host |
+| `<name>` | creds test | The credential name (or numeric ID shown by `creds list`) to verify |
+| `--creds prod-vc` | discover / plan / deploy | Which saved credential to use |
+| `--out inventory.json` | discover | Optional: also write the discovered inventory to a file |
+| `-c my.yaml` | plan, deploy | Path to your spec file (`--config`) — **fill in your own file** |
+| `--yes` | deploy | Skips the interactive confirmation — required in scripts |
+| `--port 8080` | serve | Web UI port |
+| `--host` (serve) | serve | Bind address, default `0.0.0.0`; use `127.0.0.1` for local-only access |
 
 Exit codes: `0` all succeeded / `2` partial success / `1` failure — easy to check from scripts.
 

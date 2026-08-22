@@ -119,15 +119,57 @@ sudo systemctl restart vsphere-auto    # หรือ: bash start.sh อีก�
 
 ### CLI (core ชุดเดียวกัน)
 
+**1. บันทึก credential ของ vCenter** (ทำครั้งเดียวต่อ vCenter; รหัสผ่านให้ผ่าน `--password` หรือตัวแปรสภาพแวดล้อม `VSPHERE_PASSWORD` — จะถูกจัดเก็บแบบเข้ารหัส):
+
 ```bash
 vsphere-auto creds add --name prod-vc --host 10.0.0.10 --username administrator@vsphere.local
-vsphere-auto creds test prod-vc
-vsphere-auto discover --creds prod-vc                 # ค้นหาทรัพยากร
-cp config/config.example.yaml my.yaml                 # แก้ไข spec ของคุณ
-vsphere-auto plan --config my.yaml --creds prod-vc    # ดูตัวอย่างแบบ dry-run
-vsphere-auto deploy --config my.yaml --creds prod-vc --yes
-vsphere-auto serve --port 8080                        # เริ่ม web UI
+vsphere-auto creds test prod-vc     # ทดสอบว่าเชื่อมต่อได้ ("prod-vc" = ชื่อที่เพิ่งบันทึก)
+vsphere-auto creds list             # แสดง credentials ที่บันทึกไว้ทั้งหมด
 ```
+
+**2. ค้นหาทรัพยากร** — ดูว่า vCenter เครื่องนี้มี templates/datastores/hosts/networks อะไรบ้าง:
+
+```bash
+vsphere-auto discover --creds prod-vc
+```
+
+**3. อธิบายสิ่งที่จะปรับใช้ในไฟล์ YAML**:
+
+```bash
+cp config/config.example.yaml my.yaml   # เริ่มจากตัวอย่างที่มีคำอธิบายในไฟล์
+# แก้ไข my.yaml: จำนวน VM และสเปก, ชื่อ template, โหมด IP, รูปแบบชื่อ…
+```
+
+**4. ดูตัวอย่างก่อน แล้วค่อยปรับใช้**:
+
+```bash
+vsphere-auto plan --config my.yaml --creds prod-vc      # dry-run: แสดง VM ที่จะสร้างและผลการเลือกทรัพยากร ไม่แก้อะไรจริง
+vsphere-auto deploy --config my.yaml --creds prod-vc --yes   # สร้าง VM จริง (--yes ข้ามการยืนยันแบบโต้ตอบ)
+```
+
+หรือทำทุกอย่างผ่าน web UI:
+
+```bash
+vsphere-auto serve --port 8080      # เริ่ม web service ที่ http://localhost:8080
+```
+
+**พารามิเตอร์ของคำสั่ง** (ค่าในตัวอย่างข้างบน เช่น `prod-vc`, `10.0.0.10` เป็นเพียงตัวอย่าง — แทนที่ด้วยค่าจริงของคุณ):
+
+| พารามิเตอร์ | ใช้กับคำสั่ง | ความหมาย |
+|-------------|--------------|----------|
+| `--name prod-vc` | creds add | ชื่อที่คุณตั้งเองสำหรับ credential นี้ ภายหลังอ้างถึงผ่าน `--creds prod-vc` |
+| `--host 10.0.0.10` | creds add | ที่อยู่ vCenter (หรือ ESXi) ของคุณ — **ต้องใส่ค่าจริง** |
+| `--username …` | creds add | บัญชี vSphere เช่น `administrator@vsphere.local` — **ต้องใส่ค่าจริง** |
+| `--password` | creds add | แนะนำให้ไม่พิมพ์: ส่งรหัสผ่านผ่านตัวแปร `VSPHERE_PASSWORD` แทน เพื่อไม่ให้ค้างใน shell history |
+| `--port 443` | creds add, discover | พอร์ต SDK, ปกติ 443 ไม่ต้องแก้ |
+| `--type vcenter` | creds add | `vcenter` (ค่าเริ่มต้น); ใช้ `esxi` เมื่อเชื่อมตรงเข้า ESXi host |
+| `<name>` | creds test | ชื่อ credential (หรือ ID ตัวเลขจาก `creds list`) ที่จะทดสอบ |
+| `--creds prod-vc` | discover / plan / deploy | เลือกว่าจะใช้ credential ที่บันทึกไว้ตัวไหน |
+| `--out inventory.json` | discover | ไม่บังคับ: บันทึกผล inventory ลงไฟล์ด้วย |
+| `-c my.yaml` | plan, deploy | path ของไฟล์ spec (`--config`) — **ใส่ไฟล์ของคุณเอง** |
+| `--yes` | deploy | ข้ามการยืนยันแบบโต้ตอบ — จำเป็นเมื่อรันใน script |
+| `--port 8080` | serve | พอร์ตของ web UI |
+| `--host` (serve) | serve | ที่อยู่ bind ค่าเริ่มต้น `0.0.0.0`; ใช้ `127.0.0.1` หากใช้เฉพาะเครื่อง |
 
 Exit codes: `0` สำเร็จทั้งหมด / `2` สำเร็จบางส่วน / `1` ล้มเหลว — ตรวจสอบจาก script ได้ง่าย
 

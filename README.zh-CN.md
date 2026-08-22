@@ -119,15 +119,57 @@ sudo systemctl restart vsphere-auto    # 或重新 bash start.sh
 
 ### CLI（同一套核心）
 
+**1. 保存 vCenter 凭据**（每个 vCenter 一次；密码通过 `--password` 或 `VSPHERE_PASSWORD` 环境变量提供，以加密形式存储）：
+
 ```bash
 vsphere-auto creds add --name prod-vc --host 10.0.0.10 --username administrator@vsphere.local
-vsphere-auto creds test prod-vc
-vsphere-auto discover --creds prod-vc                 # 发现资源
-cp config/config.example.yaml my.yaml                 # 编辑规格
-vsphere-auto plan --config my.yaml --creds prod-vc    # 干跑预览
-vsphere-auto deploy --config my.yaml --creds prod-vc --yes
-vsphere-auto serve --port 8080                        # 启动 Web
+vsphere-auto creds test prod-vc     # 验证连通性（prod-vc = 刚才保存的凭据名）
+vsphere-auto creds list             # 查看所有已保存的凭据
 ```
+
+**2. 发现阶段资源**——查看该 vCenter 上有哪些模板/数据存储/主机/网络可用：
+
+```bash
+vsphere-auto discover --creds prod-vc
+```
+
+**3. 用 YAML 文件描述要部署的内容**：
+
+```bash
+cp config/config.example.yaml my.yaml   # 从带注释的示例配置开始
+# 编辑 my.yaml：VM 数量与规格、模板名、IP 模式、命名规则等
+```
+
+**4. 先预览，再部署**：
+
+```bash
+vsphere-auto plan --config my.yaml --creds prod-vc      # 干跑预览：显示将创建的 VM 和资源选择结果，不做任何更改
+vsphere-auto deploy --config my.yaml --creds prod-vc --yes   # 实际创建 VM（--yes 跳过交互式确认）
+```
+
+也可以全部通过 Web 界面完成：
+
+```bash
+vsphere-auto serve --port 8080      # 启动 Web 服务，访问 http://localhost:8080
+```
+
+**命令参数说明**（上文的 `prod-vc`、`10.0.0.10` 等均为示例，请替换为实际值）：
+
+| 参数 | 用于命令 | 含义 |
+|------|----------|------|
+| `--name prod-vc` | creds add | 凭据的自定义名称（随意起），之后通过 `--creds prod-vc` 引用 |
+| `--host 10.0.0.10` | creds add | 你的 vCenter（或 ESXi）地址 —— **需按实际填写** |
+| `--username …` | creds add | vSphere 账号，如 `administrator@vsphere.local` —— **需按实际填写** |
+| `--password` | creds add | 建议不写：改用环境变量 `VSPHERE_PASSWORD` 传密码，避免留在 shell 历史记录里 |
+| `--port 443` | creds add、discover | SDK 端口，443 一般不用改 |
+| `--type vcenter` | creds add | `vcenter`（默认）；直连 ESXi 主机时填 `esxi` |
+| `<name>` | creds test | 要测试的凭据名称（或 `creds list` 显示的数字 ID） |
+| `--creds prod-vc` | discover / plan / deploy | 指定使用哪个已保存的凭据 |
+| `--out inventory.json` | discover | 可选：把发现的资源清单额外写入文件 |
+| `-c my.yaml` | plan、deploy | 规格文件路径（即 `--config`）—— **需按实际填写** |
+| `--yes` | deploy | 跳过交互式确认，脚本中必须加 |
+| `--port 8080` | serve | Web 界面端口 |
+| `--host`（serve） | serve | 监听地址，默认 `0.0.0.0`；仅本机使用填 `127.0.0.1` |
 
 退出码：`0` 全部成功 / `2` 部分成功 / `1` 失败，便于脚本判断。
 
