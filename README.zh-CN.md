@@ -1,6 +1,8 @@
 # vSphere Auto — vSphere 批量虚拟机部署工具
 
-> [English](README.md) | [ไทย](README.th.md)
+> [English](README.md) | [中文](README.zh-CN.md) | [ไทย](README.th.md)
+
+![License: MIT](https://img.shields.io/badge/License-MIT-green) ![Python](https://img.shields.io/badge/Python-3.11%2B-blue) ![Platform](https://img.shields.io/badge/vCenter-6.7%20%7C%207.0%20%7C%208.0-orange)
 
 **解决什么问题**：vSphere 自带界面一次只能创建一台 VM，规格/网络/IP 要逐台手填。本工具把这件事变成一次操作——Web 向导 4 步或一条 CLI 命令，批量创建数十台规格一致的虚拟机：自动发现 vSphere 资源、可手动指定文件夹/存储/主机放置、并发部署、静态 IP 与主机名首次开机自动注入、任务实时进度、失败时给出明确原因和处置建议。
 
@@ -10,6 +12,10 @@
 - 密码加密存储，日志与输出自动脱敏
 
 > 运行环境：Linux · Python 3.11+ · vCenter 6.7 / 7.0 U3+ / 8.0+ 或直连 ESXi
+
+| 部署向导 | 任务页（实时进度 / 筛选 / 报错提示） |
+|----------|--------------------------------------|
+| ![部署向导](docs/screenshots/wizard.png) | ![任务页](docs/screenshots/tasks.png) |
 
 ---
 
@@ -166,6 +172,12 @@ vsphere-auto serve --port 8080                        # 启动 Web
 
 **如何轮换密码？**
 设置页编辑凭据填入新密码（留空保持不变），或 `vsphere-auto creds update <id> --password '***'`。
+
+---
+
+## 支持与反馈
+
+发现问题或有功能建议？请[提交 Issue](https://github.com/ilysom0611/vsphere-auto/issues)。
 
 ---
 

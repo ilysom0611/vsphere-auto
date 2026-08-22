@@ -2,6 +2,8 @@
 
 > [English](README.md) | [中文](README.zh-CN.md) | [ไทย](README.th.md)
 
+![License: MIT](https://img.shields.io/badge/License-MIT-green) ![Python](https://img.shields.io/badge/Python-3.11%2B-blue) ![Platform](https://img.shields.io/badge/vCenter-6.7%20%7C%207.0%20%7C%208.0-orange)
+
 **The problem it solves**: the built-in vSphere UI creates one VM at a time, with specs / network / IP filled in by hand for each. This tool turns that into a single operation — a 4-step web wizard or one CLI command that batch-creates dozens of identical VMs: automatic vSphere resource discovery, manual folder / datastore / host placement when you need control, concurrent deployment, static IP & hostname injected at first boot, live task progress, and failures reported with a clear cause and how to fix it.
 
 - Template clone (recommended) or fresh install from ISO
@@ -10,6 +12,10 @@
 - Encrypted credential storage; secrets redacted from logs and output
 
 > Runtime: Linux · Python 3.11+ · vCenter 6.7 / 7.0 U3+ / 8.0+ or direct ESXi
+
+| Deployment Wizard | Tasks (live progress, filters, error hints) |
+|-------------------|---------------------------------------------|
+| ![Deployment wizard](docs/screenshots/wizard.png) | ![Tasks page](docs/screenshots/tasks.png) |
 
 ---
 
@@ -166,6 +172,12 @@ Expected — ESXi has no datacenter/cluster concept; just pick the host and data
 
 **How do I rotate a password?**
 Edit the credential on the Settings page and enter a new password (leave blank to keep the current one), or run `vsphere-auto creds update <id> --password '***'`.
+
+---
+
+## Support
+
+Found a bug or have a feature request? Please [open an issue](https://github.com/ilysom0611/vsphere-auto/issues).
 
 ---
 
