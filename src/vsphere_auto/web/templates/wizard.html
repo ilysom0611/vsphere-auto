@@ -1,0 +1,497 @@
+{% extends "base.html" %}
+{% block title %}Deployment Wizard - vSphere Auto{% endblock %}
+{% block content %}
+<h1 data-i18n="wiz.h1">部署向导</h1>
+
+<ol class="wizSteps" id="wizSteps">
+  <li data-i18n="wiz.s1">① 连接</li>
+  <li data-i18n="wiz.s2">② 来源与放置</li>
+  <li data-i18n="wiz.s3">③ 规格与数量</li>
+  <li data-i18n="wiz.s4">④ 确认部署</li>
+</ol>
+
+<!-- ================= STEP 1: connect & discover ================= -->
+<section class="card" id="step1">
+  <div class="row">
+    <select id="credsSelect" style="max-width:320px"><option value="" data-i18n="idx.cred.opt">-- 选择已保存的凭据 --</option></select>
+    <button id="btnConnect" class="primary" data-i18n="wiz.connect">连接并发现资源</button>
+    <span id="connStatus" class="muted"></span>
+  </div>
+  <details id="tmpDetails">
+    <summary data-i18n="idx.tmp.summary">或使用临时连接（不保存）</summary>
+    <div class="grid2">
+      <input id="tmpHost" data-i18n-ph="idx.tmp.host.ph" placeholder="主机 (10.0.0.10)">
+      <input id="tmpUser" data-i18n-ph="idx.tmp.user.ph" placeholder="用户名">
+      <input id="tmpPass" type="password" data-i18n-ph="idx.tmp.pass.ph" placeholder="密码">
+      <input id="tmpPort" placeholder="443" value="443">
+    </div>
+  </details>
+  <div id="connSummary"></div>
+</section>
+
+<!-- ================= STEP 2: source & placement ================= -->
+<section class="card" id="step2" style="display:none">
+  <fieldset class="wizFieldset">
+    <legend data-i18n="wiz.source">部署来源</legend>
+    <label><input type="radio" name="wizSrc" value="tpl" checked><span data-i18n="wiz.mode.tpl"> 模板克隆（推荐，最快）</span></label>
+    <label><input type="radio" name="wizSrc" value="iso"><span data-i18n="wiz.mode.iso"> ISO 全新安装（需选择 ISO 文件）</span></label>
+
+    <div class="grid2" id="tplPanel" style="margin-top:10px">
+      <label><span class="lbl" data-i18n="wiz.tpl.label">虚拟机模板</span><select id="wTemplate"><option value="" data-i18n="idx.tpl.opt">-- 自动 / 选择 --</option></select></label>
+    </div>
+    <div id="isoPanel" style="display:none;margin-top:10px">
+      <div class="grid2">
+        <label><span class="lbl" data-i18n="wiz.iso.ds.label">扫描哪个数据存储</span><select id="wIsoDs"></select></label>
+        <label><span class="lbl" data-i18n="idx.guest">Guest ID</span><input id="wGuest" value="ubuntu64Guest"></label>
+      </div>
+      <div class="row">
+        <button id="btnScanIso" data-i18n="wiz.scaniso">扫描 ISO</button>
+        <span id="isoStatus" class="muted"></span>
+      </div>
+      <label><span class="lbl" data-i18n="idx.iso.opt2">ISO（可选）</span><select id="wIso"><option value="" data-i18n="wiz.iso.pick">-- 请先扫描数据存储 --</option></select></label>
+    </div>
+  </fieldset>
+
+  <fieldset class="wizFieldset">
+    <legend data-i18n="wiz.place">放置位置（可选，默认自动选择）</legend>
+    <div class="grid2">
+      <label><span class="lbl" data-i18n="idx.ds.label">数据存储（留空 = 自动选剩余空间最大）</span><select id="wDatastore"><option value="" data-i18n="idx.ds.auto">auto（自动选择）</option></select></label>
+      <label><span class="lbl" data-i18n="idx.folder.label">文件夹（如 workloads/demo）</span><input id="wFolder"></label>
+      <label><span class="lbl" data-i18n="idx.network">网络</span><select id="wNetwork"><option value="">auto</option></select></label>
+      <label><span class="lbl" data-i18n="idx.e.host">宿主机（可选）</span><input id="wHost" data-i18n-ph="idx.e.host.ph" placeholder="留空 = 自动放置"></label>
+    </div>
+  </fieldset>
+</section>
+
+<!-- ================= STEP 3: specs & count ================= -->
+<section class="card" id="step3" style="display:none">
+  <fieldset class="wizFieldset">
+    <legend data-i18n="wiz.specs">规格</legend>
+    <div class="grid3">
+      <label><span class="lbl" data-i18n="idx.count">数量</span><input id="wCount" type="number" value="1" min="1" max="500" style="width:90px"></label>
+      <label><span class="lbl" data-i18n="idx.naming">命名模板（须含 {index}）</span><input id="wNaming" value="vm-{index:02d}"></label>
+      <label><span class="lbl" data-i18n="idx.concurrency">并发</span><input id="wConcurrency" type="number" value="5" min="1" max="20" style="width:90px"></label>
+      <label><span class="lbl" data-i18n="idx.cpu">CPU</span><input id="wCpu" type="number" value="2" min="1"></label>
+      <label><span class="lbl" data-i18n="idx.mem">内存 MB</span><input id="wMem" type="number" value="4096"></label>
+      <label><span class="lbl" data-i18n="idx.disk">磁盘 GB（只扩不缩）</span><input id="wDisk" type="number" value="40"></label>
+    </div>
+    <div class="grid2" style="margin-top:8px">
+      <label><span class="lbl" data-i18n="wiz.prov">磁盘置备</span>
+        <select id="wProv">
+          <option value="" data-i18n="wiz.prov.keep">保持模板默认</option>
+          <option value="thin" data-i18n="wiz.prov.thin">精简置备 thin</option>
+          <option value="thick" data-i18n="wiz.prov.thick">厚置备 thick</option>
+          <option value="eagerZeroedThick" data-i18n="wiz.prov.eager">厚置备置零 eagerZeroedThick</option>
+        </select></label>
+      <label><span class="lbl" data-i18n="idx.ipmode">IP 分配</span>
+        <select id="wIpMode">
+          <option value="dhcp" data-i18n="idx.ip.dhcp">dhcp</option>
+          <option value="auto" data-i18n="idx.ip.auto">auto（IP 池）</option>
+        </select></label>
+    </div>
+    <p class="muted" data-i18n="wiz.ipmode.note">auto：从 IP 池按台自动分配静态 IP；dhcp：由 DHCP 分配。</p>
+    <div class="grid3">
+      <label><span class="lbl" data-i18n="idx.netmask">子网掩码（静态 IP 时必填）</span><input id="wNetmask" data-i18n-ph="idx.netmask.ph" placeholder="255.255.255.0"></label>
+      <label><span class="lbl" data-i18n="idx.gateway">网关</span><input id="wGateway" data-i18n-ph="idx.gateway.ph" placeholder="10.0.0.1"></label>
+      <label><span class="lbl" data-i18n="idx.dns">DNS（逗号分隔）</span><input id="wDns" data-i18n-ph="idx.dns.ph" placeholder="10.0.0.2,8.8.8.8"></label>
+    </div>
+  </fieldset>
+</section>
+
+<!-- ================= STEP 4: review & deploy ================= -->
+<section class="card" id="step4" style="display:none">
+  <p class="muted" id="reviewHint" data-i18n="wiz.review.hint">点击“生成计划”预览将要创建的虚拟机。</p>
+  <div class="row">
+    <button id="btnPlanW" data-i18n="wiz.plan.btn">生成计划</button>
+    <span id="planHintW" class="muted"></span>
+  </div>
+  <div id="planTableW"></div>
+  <pre id="planResultW" class="pre" style="display:none"></pre>
+  <div class="row">
+    <button id="btnDeployW" class="primary" data-i18n="wiz.deploy.btn">开始部署</button>
+    <div id="deployResultW"></div>
+  </div>
+</section>
+
+<!-- shared bottom nav -->
+<div class="wizNav">
+  <button id="btnPrev" data-i18n="wiz.prev">上一步</button>
+  <span class="spacer"></span>
+  <button id="btnNext" class="primary" data-i18n="wiz.next">下一步</button>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+// Wizard deploy flow: connect -> source/placement -> specs -> review.
+// All server-supplied values are rendered via textContent (never innerHTML
+// interpolation); UI text comes from the i18n dictionary via t()/data-i18n.
+let inventory=null;
+const LS_KEY='vsphereWizardState';
+const LAST_STEP=4;
+
+function el(tag, cls, text){ const e=document.createElement(tag); if(cls) e.className=cls; if(text!==undefined) e.textContent=text; return e; }
+function badge(kind, text){ return el('span','badge '+kind, text); }
+function gb(n){ n=Number(n)||0; return n>=1024**3 ? (n/1024**3).toFixed(0)+' GB' : (n/1024**2).toFixed(0)+' MB'; }
+
+/* ---------- step navigation ---------- */
+let curStep=1;
+function showStep(n){
+  curStep=n;
+  for(let i=1;i<=LAST_STEP;i++) document.getElementById('step'+i).style.display = i===n ? '' : 'none';
+  document.querySelectorAll('#wizSteps li').forEach((li,i)=>{
+    li.classList.toggle('active', i+1===n);
+    li.classList.toggle('done', i+1<n);
+  });
+  document.getElementById('btnPrev').disabled = n===1;
+  document.getElementById('btnNext').textContent = n===LAST_STEP ? t('wiz.deploy.btn') : t('wiz.next');
+  saveState();
+}
+function connBody(){
+  const v=document.getElementById('credsSelect').value;
+  if(v) return {credsId:parseInt(v,10)};
+  return {host:document.getElementById('tmpHost').value, username:document.getElementById('tmpUser').value,
+          password:document.getElementById('tmpPass').value, port:document.getElementById('tmpPort').value};
+}
+function validateStep(n){
+  const status=document.getElementById('connStatus');
+  if(n===1 && !inventory){
+    status.innerHTML='';
+    status.appendChild(badge('warn', t('wiz.conn.need')));
+    return false;
+  }
+  if(n===2){
+    const src=document.querySelector('input[name=wizSrc]:checked').value;
+    const ok = src==='tpl' ? !!document.getElementById('wTemplate').value
+                           : !!document.getElementById('wIso').value;
+    if(!ok){
+      document.getElementById('isoStatus').innerHTML='';
+      document.getElementById('isoStatus').appendChild(badge('err', t(src==='tpl'?'wiz.tpl.need':'wiz.iso.need')));
+      return false;
+    }
+  }
+  if(n===3){
+    const naming=document.getElementById('wNaming').value;
+    if(naming.indexOf('{index}')<0 && naming.indexOf('{index:02d}')<0){
+      document.getElementById('planHintW').textContent='';
+      alert(t('idx.naming')+' — {index}');
+      return false;
+    }
+  }
+  return true;
+}
+
+/* ---------- step 1: connect ---------- */
+async function loadCreds(){
+  try{
+    const r=await fetch('/api/creds'); const list=await r.json();
+    const selEl=document.getElementById('credsSelect');
+    const prev=selEl.value;
+    selEl.innerHTML='';
+    const def=el('option','', t('idx.cred.opt')); def.value=''; selEl.appendChild(def);
+    list.forEach(c=>{ const o=el('option','', `${c.name} (${c.host})`); o.value=c.id; selEl.appendChild(o); });
+    if(prev) selEl.value=prev;
+  }catch(e){}
+}
+async function doConnect(){
+  const status=document.getElementById('connStatus');
+  const body=connBody();
+  if(!body.credsId && !(body.host&&body.username)){
+    status.innerHTML='';
+    status.appendChild(badge('warn', t('d.selectcred')));
+    return;
+  }
+  status.innerHTML='';
+  status.appendChild(el('span','muted',t('d.discovering')));
+  const btn=document.getElementById('btnConnect'); btn.disabled=true;
+  let r,j;
+  try{
+    r=await fetch('/api/discover',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    j=await r.json();
+  }catch(e){
+    status.innerHTML='';
+    status.appendChild(badge('err',t('d.netfail')));
+    status.appendChild(document.createTextNode(' '+(e&&e.message||e)));
+    btn.disabled=false; return;
+  }
+  btn.disabled=false;
+  if(!r.ok || (j.error && !j.summary)){
+    status.innerHTML='';
+    status.appendChild(badge('err',t('d.fail')));
+    status.appendChild(document.createTextNode(' '+((j&&j.error)||('HTTP '+r.status))));
+    inventory=null; saveState(); return;
+  }
+  inventory=j;
+  fillSelects();
+  const s=j.summary||{};
+  status.innerHTML='';
+  if(j.error){
+    status.appendChild(badge('warn',t('d.partial')));
+    status.appendChild(document.createTextNode(' '+j.error+' · '+t('wiz.conn.ok2')));
+  } else {
+    status.appendChild(badge('ok',t('d.ok')));
+    status.appendChild(document.createTextNode(` DC ${s.datacenters||0} · ${t('d.cluster')} ${s.clusters||0} · ${t('d.hosts')} ${s.hosts||0} · ${t('d.ds')} ${s.datastores||0} · ${t('d.templates')} ${s.templates||0}`));
+  }
+  saveState();
+}
+
+/* ---------- select population ---------- */
+function fillSelects(){
+  if(!inventory) return;
+  const tpls=(inventory.templates||[]).map(x=>[x.name,x.name]);
+  const nets=(inventory.networks||[]).map(x=>[x.name,x.name]);
+  const dss=(inventory.datastores||[]).filter(d=>d.accessible!==false)
+    .sort((a,b)=>(b.freeSpace||0)-(a.freeSpace||0))
+    .map(d=>[d.name, `${d.name}（${t('d.free')} ${gb(d.freeSpace)}）`]);
+  refill('wTemplate',[['',t('idx.tpl.opt')]].concat(tpls));
+  refill('wNetwork',[['','auto']].concat(nets));
+  refill('wDatastore',[['',t('idx.ds.auto')]].concat(dss));
+  refill('wIsoDs', dss.length?dss:[['','']]);
+}
+function refill(id, opts){
+  const s=document.getElementById(id);
+  const v=s.dataset.pendingVal||s.value;
+  s.innerHTML='';
+  opts.forEach(([val,txt])=>{ const o=el('option','',txt); o.value=val; s.appendChild(o); });
+  try{ s.value=v; }catch(e){}
+  delete s.dataset.pendingVal;
+}
+
+/* ---------- step 2: ISO scan ---------- */
+async function doScanIso(){
+  const st=document.getElementById('isoStatus');
+  const ds=document.getElementById('wIsoDs').value;
+  st.innerHTML=''; st.appendChild(el('span','muted',t('wiz.iso.scanning')));
+  const btn=document.getElementById('btnScanIso'); btn.disabled=true;
+  let r,j;
+  try{
+    r=await fetch('/api/discover/iso',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(Object.assign(connBody(),{datastore:ds}))});
+    j=await r.json();
+  }catch(e){
+    st.innerHTML=''; st.appendChild(badge('err',t('d.netfail'))); btn.disabled=false; return;
+  }
+  btn.disabled=false;
+  const isos=j.isoImages||[];
+  const sel=document.getElementById('wIso');
+  const prev=sel.value;
+  sel.innerHTML='';
+  const ph=el('option','',t('wiz.iso.pick')); ph.value=''; sel.appendChild(ph);
+  isos.forEach(x=>{ const o=el('option','', x.fullPath+`（${gb(x.size)}）`); o.value=x.fullPath; sel.appendChild(o); });
+  if(prev){ try{ sel.value=prev; }catch(e){} }
+  st.innerHTML='';
+  if(!r.ok){ st.appendChild(badge('err',t('d.fail'))); st.appendChild(document.createTextNode(' '+(j.error||''))); }
+  else if(!isos.length){ st.appendChild(badge('warn',t('wiz.iso.none'))); }
+  else { st.appendChild(badge('ok', String(isos.length))); }
+  saveState();
+}
+function syncSourcePanels(){
+  const src=document.querySelector('input[name=wizSrc]:checked').value;
+  document.getElementById('tplPanel').style.display = src==='tpl'?'':'none';
+  document.getElementById('isoPanel').style.display = src==='iso'?'':'none';
+}
+
+/* ---------- config assembly ---------- */
+function wizCfg(){
+  const count=Math.max(1, parseInt(document.getElementById('wCount').value||'1',10));
+  const naming=document.getElementById('wNaming').value;
+  const cpu=parseInt(document.getElementById('wCpu').value,10);
+  const mem=parseInt(document.getElementById('wMem').value,10);
+  const disk=parseInt(document.getElementById('wDisk').value,10);
+  const prov=document.getElementById('wProv').value;
+  const netName=document.getElementById('wNetwork').value;
+  const ipMode=document.getElementById('wIpMode').value;
+  const src=document.querySelector('input[name=wizSrc]:checked').value;
+  const tpl=document.getElementById('wTemplate').value;
+  const iso=document.getElementById('wIso').value;
+  const guest=document.getElementById('wGuest').value.trim();
+  const ds=document.getElementById('wDatastore').value;
+  const folder=document.getElementById('wFolder').value.trim();
+  const hostName=document.getElementById('wHost').value.trim();
+
+  const vms=[];
+  for(let i=1;i<=count;i++){
+    const name=naming.replace('{index:02d}',String(i).padStart(2,'0')).replace('{index}',String(i));
+    const vm={name, cpu, memoryMB:mem, diskGB:disk, networks:[{network:netName||'auto', ip:ipMode}]};
+    if(src==='tpl'){ if(tpl) vm.template=tpl; }
+    else { vm.iso=iso; if(guest) vm.guestId=guest; }
+    if(prov) vm.provisioning=prov;
+    if(hostName) vm.host=hostName;
+    vms.push(vm);
+  }
+  const cfg={vms, batch:{concurrency:parseInt(document.getElementById('wConcurrency').value,10)||5, onError:'continue'}};
+  cfg.batch.naming=naming;
+  if(folder) cfg.defaults={folder};
+  if(ds) cfg.vcenter=Object.assign(cfg.vcenter||{}, {datastore:ds});
+  const netmask=document.getElementById('wNetmask').value.trim(),
+        gateway=document.getElementById('wGateway').value.trim(),
+        dns=document.getElementById('wDns').value.trim();
+  if(netmask||gateway||dns){
+    const pool={}; if(gateway)pool.gateway=gateway; if(netmask)pool.netmask=netmask;
+    if(dns)pool.dns=dns.split(',').map(s=>s.trim()).filter(Boolean);
+    cfg.ipPool=pool;
+  }
+  const credsId=document.getElementById('credsSelect').value;
+  if(credsId) cfg.vcenter=Object.assign(cfg.vcenter||{}, {credsRef:credsId});
+  else{
+    const h=document.getElementById('tmpHost').value, u=document.getElementById('tmpUser').value, p=document.getElementById('tmpPass').value;
+    if(h&&u) cfg.vcenter=Object.assign(cfg.vcenter||{}, {host:h, user:u, password:p, port:parseInt(document.getElementById('tmpPort').value,10)||443});
+  }
+  if(!cfg.vcenter) delete cfg.vcenter;
+  return cfg;
+}
+
+/* ---------- step 4: plan + deploy ---------- */
+function renderPlan(j){
+  const box=document.getElementById('planTableW');
+  box.innerHTML='';
+  const tbl=el('table','table tblmini');
+  const thead=el('thead'); const hr=el('tr');
+  [t('wiz.col.vm'),t('wiz.col.src'),t('wiz.col.spec'),t('wiz.col.net'),t('wiz.col.place')].forEach(h=>hr.appendChild(el('th','',h)));
+  thead.appendChild(hr); tbl.appendChild(thead);
+  const tb=el('tbody');
+  (j.vms||[]).forEach(vm=>{
+    const tr=el('tr');
+    const srcTxt = vm.template || (String(vm.iso||'').split('/').pop() || '');
+    const nets=(vm.networks||[]).map(n=>`${n.network||'auto'}/${n.ip}`).join(', ');
+    tr.appendChild(el('td','',vm.name||''));
+    tr.appendChild(el('td','',srcTxt));
+    tr.appendChild(el('td','',`${vm.cpu??''} / ${vm.memoryMB??''} / ${vm.diskGB??''}`));
+    tr.appendChild(el('td','',nets));
+    const place=[document.getElementById('wDatastore').value, document.getElementById('wFolder').value.trim(), document.getElementById('wHost').value.trim()].filter(Boolean).join(' / ');
+    tr.appendChild(el('td','', place||'auto'));
+    tb.appendChild(tr);
+  });
+  tbl.appendChild(tb);
+  box.appendChild(tbl);
+}
+async function doPlanW(){
+  const hint=document.getElementById('planHintW');
+  hint.textContent=t('p.computing');
+  let r,j;
+  try{
+    r=await fetch('/api/plan',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({config:wizCfg()})});
+    j=await r.json();
+  }catch(e){
+    hint.textContent=''; document.getElementById('planTableW').innerHTML='';
+    document.getElementById('planTableW').appendChild(badge('err',t('d.netfail'))); return;
+  }
+  if(!r.ok){
+    hint.textContent='';
+    const box=document.getElementById('planTableW'); box.innerHTML='';
+    box.appendChild(badge('err',t('dep.failed')));
+    box.appendChild(document.createTextNode(' '+(j.error||('HTTP '+r.status))));
+    return;
+  }
+  hint.textContent=t('p.ok',{n:j.count});
+  renderPlan(j);
+  const pre=document.getElementById('planResultW');
+  pre.style.display=''; pre.textContent=JSON.stringify(j,null,2);
+}
+async function doDeployW(){
+  const box=document.getElementById('deployResultW');
+  box.innerHTML='';
+  let r,j;
+  try{
+    r=await fetch('/api/deploy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({config:wizCfg()})});
+    j=await r.json();
+  }catch(e){
+    box.appendChild(badge('err',t('dep.failed')));
+    box.appendChild(document.createTextNode(' '+(e&&e.message||e)));
+    return;
+  }
+  if(r.ok && j.batch_id){
+    box.appendChild(el('span','badge run',t('dep.submitted')));
+    box.appendChild(document.createTextNode(t('dep.jump',{id:j.batch_id,n:j.count})));
+    setTimeout(()=>location.href='/tasks',800);
+  } else {
+    box.appendChild(badge('err',t('dep.failed')));
+    box.appendChild(document.createTextNode(' '+(j.error||('HTTP '+r.status))));
+  }
+}
+
+/* ---------- state persistence (no passwords stored) ---------- */
+function saveState(){
+  try{
+    const st={
+      step:curStep,
+      creds:document.getElementById('credsSelect').value,
+      tmp:{host:document.getElementById('tmpHost').value, user:document.getElementById('tmpUser').value, port:document.getElementById('tmpPort').value},
+      src:document.querySelector('input[name=wizSrc]:checked').value,
+      tpl:document.getElementById('wTemplate').value,
+      isoDs:document.getElementById('wIsoDs').value,
+      iso:document.getElementById('wIso').value,
+      ds:document.getElementById('wDatastore').value,
+      folder:document.getElementById('wFolder').value,
+      network:document.getElementById('wNetwork').value,
+      host:document.getElementById('wHost').value,
+      count:document.getElementById('wCount').value,
+      naming:document.getElementById('wNaming').value,
+      concurrency:document.getElementById('wConcurrency').value,
+      cpu:document.getElementById('wCpu').value,
+      mem:document.getElementById('wMem').value,
+      disk:document.getElementById('wDisk').value,
+      prov:document.getElementById('wProv').value,
+      ipMode:document.getElementById('wIpMode').value,
+      netmask:document.getElementById('wNetmask').value,
+      gateway:document.getElementById('wGateway').value,
+      dns:document.getElementById('wDns').value,
+      guest:document.getElementById('wGuest').value,
+      inventory:inventory,
+    };
+    localStorage.setItem(LS_KEY, JSON.stringify(st));
+  }catch(e){}
+}
+let stateApplied=false;
+function applySaved(){
+  if(stateApplied) return; stateApplied=true;
+  let st; try{ st=JSON.parse(localStorage.getItem(LS_KEY)||'null'); }catch(e){ st=null; }
+  if(!st) return;
+  try{
+    if(st.creds!==undefined) document.getElementById('credsSelect').dataset.pendingVal=st.creds;
+    const tm=st.tmp||{};
+    for(const [id,v] of Object.entries({tmpHost:tm.host,tmpUser:tm.user,tmpPort:tm.port})){
+      if(v!==undefined&&v!=='') document.getElementById(id).value=v;
+    }
+    if(st.src){ const r=document.querySelector(`input[name=wizSrc][value=${st.src}]`); if(r) r.checked=true; }
+    syncSourcePanels();
+    const m={'wTemplate':st.tpl,'wIsoDs':st.isoDs,'wIso':st.iso,'wDatastore':st.ds,'wFolder':st.folder,
+             'wNetwork':st.network,'wHost':st.host,'wCount':st.count,'wNaming':st.naming,
+             'wConcurrency':st.concurrency,'wCpu':st.cpu,'wMem':st.mem,'wDisk':st.disk,
+             'wProv':st.prov,'wIpMode':st.ipMode,'wNetmask':st.netmask,'wGateway':st.gateway,
+             'wDns':st.dns,'wGuest':st.guest};
+    for(const [id,v] of Object.entries(m)){
+      if(v!==undefined&&v!==''){
+        const n=document.getElementById(id);
+        if(n.tagName==='SELECT'&&v) n.dataset.pendingVal=v; else n.value=v;
+      }
+    }
+    if(st.inventory && st.inventory.summary){ inventory=st.inventory; fillSelects(); }
+    // restore pendingVal into actual selection now that options exist
+    document.querySelectorAll('select[data-pending-val]').forEach(s=>{
+      try{ s.value=s.dataset.pendingVal; }catch(e){}
+      delete s.dataset.pendingVal;
+    });
+    showStep(Math.min(Math.max(parseInt(st.step,10)||1,1),LAST_STEP));
+  }catch(e){}
+}
+
+/* ---------- wire up ---------- */
+document.getElementById('btnConnect').onclick=doConnect;
+document.getElementById('btnScanIso').onclick=doScanIso;
+document.getElementById('btnPlanW').onclick=doPlanW;
+document.getElementById('btnDeployW').onclick=doDeployW;
+document.querySelectorAll('input[name=wizSrc]').forEach(r=>r.addEventListener('change',()=>{syncSourcePanels();saveState();}));
+document.querySelectorAll('#step1 input,#step2 input,#step2 select,#step3 input,#step3 select').forEach(n=>{
+  n.addEventListener('input',saveState); n.addEventListener('change',saveState);
+});
+document.getElementById('btnPrev').onclick=()=>{ if(curStep>1) showStep(curStep-1); };
+document.getElementById('btnNext').onclick=()=>{
+  if(curStep<LAST_STEP){ if(validateStep(curStep)) showStep(curStep+1); return; }
+  // last step: always re-generate the plan right before deploying so the
+  // review table can never be stale relative to earlier steps
+  doPlanW().then(doDeployW);
+};
+showStep(curStep);
+loadCreds().then(applySaved);
+</script>
+{% endblock %}

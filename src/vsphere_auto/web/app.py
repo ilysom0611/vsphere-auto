@@ -54,7 +54,11 @@ def create_app() -> Flask:
             return None
 
     @app.get("/")
-    def index():
+    def wizard():
+        return render_template("wizard.html")
+
+    @app.get("/advanced")
+    def advanced():
         return render_template("index.html")
 
     @app.get("/settings")

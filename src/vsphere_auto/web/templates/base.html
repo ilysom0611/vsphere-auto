@@ -43,7 +43,7 @@
 // and data-i18n-ph="key" (placeholder). Dynamic strings call t(key).
 window.I18N = {
   zh: {
-    "nav.deploy": "部署", "nav.tasks": "任务", "nav.settings": "设置 / 凭据",
+    "nav.wizard": "部署向导", "nav.advanced": "高级模式", "nav.tasks": "任务", "nav.settings": "设置 / 凭据",
     "lang.toggle": "EN",
     "common.refresh": "刷新",
 
@@ -125,9 +125,40 @@ window.I18N = {
     "set.delconfirm": "确认删除凭据 #{id} ?",
     "set.test.ok": "连接成功", "set.test.fail": "连接失败",
     "set.dc": "数据中心", "set.hosts": "主机",
+
+    "wiz.h1": "部署向导",
+    "wiz.s1": "① 连接", "wiz.s2": "② 来源与放置", "wiz.s3": "③ 规格与数量", "wiz.s4": "④ 确认部署",
+    "wiz.prev": "上一步", "wiz.next": "下一步",
+    "wiz.connect": "连接并发现资源",
+    "wiz.conn.need": "请先完成连接并发现资源，才能继续下一步。",
+    "wiz.conn.ok2": "已连接，可进入下一步。",
+    "wiz.source": "部署来源",
+    "wiz.mode.tpl": " 模板克隆（推荐，最快）",
+    "wiz.mode.iso": " ISO 全新安装（需选择 ISO 文件）",
+    "wiz.tpl.label": "虚拟机模板",
+    "wiz.iso.ds.label": "扫描哪个数据存储",
+    "wiz.scaniso": "扫描 ISO",
+    "wiz.iso.pick": "-- 请先扫描数据存储 --",
+    "wiz.iso.scanning": "正在扫描 ISO...",
+    "wiz.iso.none": "未找到 .iso 文件，请确认数据存储中已上传镜像。",
+    "wiz.iso.need": "请先扫描并选择一个 ISO 文件。",
+    "wiz.tpl.need": "请选择模板，或改用 ISO 安装方式。",
+    "wiz.place": "放置位置（可选，默认自动选择）",
+    "wiz.specs": "规格",
+    "wiz.prov": "磁盘置备",
+    "wiz.prov.keep": "保持模板默认",
+    "wiz.prov.thin": "精简置备 thin",
+    "wiz.prov.thick": "厚置备 thick",
+    "wiz.prov.eager": "厚置备置零 eagerZeroedThick",
+    "wiz.ipmode.note": "auto：从 IP 池按台自动分配静态 IP；dhcp：由 DHCP 分配。",
+    "wiz.review.hint": "点击“生成计划”预览将要创建的虚拟机。",
+    "wiz.plan.btn": "生成计划",
+    "wiz.deploy.btn": "开始部署",
+    "wiz.col.vm": "名称", "wiz.col.src": "来源", "wiz.col.spec": "规格 (CPU/内存/磁盘)",
+    "wiz.col.net": "网络 / IP", "wiz.col.place": "放置",
   },
   en: {
-    "nav.deploy": "Deploy", "nav.tasks": "Tasks", "nav.settings": "Settings / Credentials",
+    "nav.wizard": "Deployment Wizard", "nav.advanced": "Advanced", "nav.tasks": "Tasks", "nav.settings": "Settings / Credentials",
     "lang.toggle": "中文",
     "common.refresh": "Refresh",
 
@@ -209,6 +240,37 @@ window.I18N = {
     "set.delconfirm": "Delete credential #{id}?",
     "set.test.ok": "Connected", "set.test.fail": "Connection failed",
     "set.dc": "DCs", "set.hosts": "hosts",
+
+    "wiz.h1": "Deployment Wizard",
+    "wiz.s1": "① Connect", "wiz.s2": "② Source & Placement", "wiz.s3": "③ Specs & Count", "wiz.s4": "④ Review & Deploy",
+    "wiz.prev": "Back", "wiz.next": "Next",
+    "wiz.connect": "Connect & Discover",
+    "wiz.conn.need": "Connect and discover resources before continuing.",
+    "wiz.conn.ok2": "Connected — continue to the next step.",
+    "wiz.source": "Deployment source",
+    "wiz.mode.tpl": " Clone from template (recommended, fastest)",
+    "wiz.mode.iso": " Fresh install from ISO (pick an ISO file)",
+    "wiz.tpl.label": "VM template",
+    "wiz.iso.ds.label": "Datastore to scan",
+    "wiz.scaniso": "Scan ISOs",
+    "wiz.iso.pick": "-- scan a datastore first --",
+    "wiz.iso.scanning": "Scanning ISOs...",
+    "wiz.iso.none": "No .iso files found; make sure an image was uploaded to the datastore.",
+    "wiz.iso.need": "Scan and pick an ISO file first.",
+    "wiz.tpl.need": "Pick a template, or switch to ISO install.",
+    "wiz.place": "Placement (optional, automatic by default)",
+    "wiz.specs": "Specs",
+    "wiz.prov": "Disk provisioning",
+    "wiz.prov.keep": "Keep template default",
+    "wiz.prov.thin": "Thin",
+    "wiz.prov.thick": "Thick",
+    "wiz.prov.eager": "Eager zeroed thick",
+    "wiz.ipmode.note": "auto: per-VM static IPs allocated from the IP pool; dhcp: assigned by DHCP.",
+    "wiz.review.hint": "Click \"Generate plan\" to preview the VMs that will be created.",
+    "wiz.plan.btn": "Generate plan",
+    "wiz.deploy.btn": "Start deployment",
+    "wiz.col.vm": "Name", "wiz.col.src": "Source", "wiz.col.spec": "Specs (CPU/Mem/Disk)",
+    "wiz.col.net": "Network / IP", "wiz.col.place": "Placement",
   }
 };
 (function () {
@@ -258,7 +320,8 @@ window.I18N = {
 </head>
 <body>
 <nav class="nav">
-  <a href="/" data-i18n="nav.deploy">部署</a>
+  <a href="/" data-i18n="nav.wizard">部署向导</a>
+  <a href="/advanced" data-i18n="nav.advanced">高级模式</a>
   <a href="/tasks" data-i18n="nav.tasks">任务</a>
   <a href="/settings" data-i18n="nav.settings">设置 / 凭据</a>
   <span style="flex:1"></span>
